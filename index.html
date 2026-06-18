@@ -3,9 +3,23 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="description" content="Gaytm: Split bills. Share memories. Stay friends. Scoped multi-group split hub.">
     <title>Gaytm // Group Hub</title>
+
+    <!-- PWA Settings & iOS Home Screen Capability -->
+    <!-- Link to the manifest file -->
+    <link rel="manifest" href="manifest.json">
+
+    <!-- Tells Android what color to make the top bar -->
+    <meta name="theme-color" content="#4f46e5">
+
+    <!-- CRITICAL FOR iPHONES: Apple requires this specific tag for home screen icons -->
+    <link rel="apple-touch-icon" href="icon-192.png">
+
+    <!-- Tells iPhones to hide the Safari interface -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -19,9 +33,19 @@
     <link rel="stylesheet" href="index.css">
     <!-- Chart.js for Pie Chart -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- heic2any for HEIC support -->
+    <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
 </head>
 
 <body class="relative text-zinc-800 h-screen w-full overflow-hidden flex flex-col antialiased selection:bg-indigo-200">
+
+    <!-- Pull to Refresh Indicator Overlay -->
+    <div id="pull-refresh-indicator" class="fixed top-0 left-0 right-0 z-[100] flex justify-center items-center py-4 pointer-events-none transform -translate-y-full transition-transform duration-250">
+        <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-xl rounded-full p-2.5 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+            <i data-lucide="rotate-cw" class="w-5 h-5 animate-spin hidden" id="pull-refresh-spinner"></i>
+            <i data-lucide="arrow-down" class="w-5 h-5 transition-transform duration-200" id="pull-refresh-arrow"></i>
+        </div>
+    </div>
 
 
 
@@ -31,7 +55,7 @@
         <!-- Center logo with subscript and loader text -->
         <div class="flex flex-col items-center justify-center">
             <div class="relative mb-6 select-none">
-                <span class="lowercase font-black text-5xl tracking-tighter" style="color: #0d2a6b; font-family: 'Inter', sans-serif; font-weight: 800;">gay<span style="color: #00baf2;">tm</span></span>
+                <span class="lowercase font-black text-5xl tracking-tighter text-[#0d2a6b] dark:text-white" style="font-family: 'Inter', sans-serif; font-weight: 800;">gay<span style="color: #00baf2;">tm</span></span>
                 <span class="absolute -bottom-4 right-0.5 text-xs font-bold text-zinc-400 lowercase tracking-wide">~by arinya</span>
             </div>
             <p id="loading-text" class="text-sm font-semibold text-zinc-500 animate-bounce mt-4">Getting things ready...</p>
@@ -42,7 +66,10 @@
     <div id="login-view" class="fixed inset-0 z-40 bg-transparent flex flex-col items-center justify-center p-6 hidden">
         <div class="w-full max-w-sm glass-card p-8 z-10">
             <div class="flex justify-center mb-6">
-                <span class="lowercase font-black text-4xl tracking-tighter select-none" style="color: #0d2a6b; font-family: 'Inter', sans-serif; font-weight: 800;">gay<span style="color: #00baf2;">tm</span></span>
+                <div class="relative select-none">
+                    <span class="lowercase font-black text-4xl tracking-tighter text-[#0d2a6b] dark:text-white" style="font-family: 'Inter', sans-serif; font-weight: 800;">gay<span style="color: #00baf2;">tm</span></span>
+                    <span class="absolute -bottom-3 right-0.5 text-[10px] font-bold text-zinc-400 lowercase tracking-wide">~by arinya</span>
+                </div>
             </div>
             
             <!-- Login State -->
@@ -53,16 +80,19 @@
                     <div class="space-y-1">
                         <label class="block text-[10px] font-bold text-zinc-400 uppercase">Email Address</label>
                         <input type="email" id="login-email" placeholder="name@domain.com"
-                            class="w-full p-3.5 rounded-xl border border-zinc-200 bg-zinc-50/50 focus:border-indigo-500 focus:bg-white outline-none font-semibold text-zinc-800" />
+                            class="w-full p-3.5 rounded-xl border border-zinc-200 bg-zinc-50/50 focus:border-indigo-500 focus:bg-white outline-none font-semibold text-zinc-800 placeholder:text-zinc-400 dark:placeholder:text-zinc-600" />
                     </div>
                     <div class="space-y-1">
                         <label class="block text-[10px] font-bold text-zinc-400 uppercase">Password</label>
                         <div class="relative flex items-center">
                             <input type="password" id="login-password" placeholder="••••••••"
-                                class="w-full p-3.5 pr-11 rounded-xl border border-zinc-200 bg-zinc-50/50 focus:border-indigo-500 focus:bg-white outline-none font-semibold text-zinc-800" />
+                                class="w-full p-3.5 pr-11 rounded-xl border border-zinc-200 bg-zinc-50/50 focus:border-indigo-500 focus:bg-white outline-none font-semibold text-zinc-800 placeholder:text-zinc-400 dark:placeholder:text-zinc-600" />
                             <button type="button" onclick="togglePasswordVisibility('login-password', this)" class="absolute right-3.5 text-zinc-400 hover:text-zinc-600 transition-colors">
                                 <i data-lucide="eye" class="w-4 h-4"></i>
                             </button>
+                        </div>
+                        <div class="text-right mt-0.5">
+                            <button type="button" onclick="forgotPassword()" class="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline bg-transparent border-none p-0 cursor-pointer">Forgot Password?</button>
                         </div>
                     </div>
                     <button onclick="login()"
@@ -83,18 +113,18 @@
                     <div class="space-y-1">
                         <label class="block text-[10px] font-bold text-zinc-400 uppercase">Your Name</label>
                         <input type="text" id="signup-name" placeholder="e.g. Bittu"
-                            class="w-full p-3.5 rounded-xl border border-zinc-200 bg-zinc-50/50 focus:border-indigo-500 focus:bg-white outline-none font-semibold text-zinc-800" />
+                            class="w-full p-3.5 rounded-xl border border-zinc-200 bg-zinc-50/50 focus:border-indigo-500 focus:bg-white outline-none font-semibold text-zinc-800 placeholder:text-zinc-400 dark:placeholder:text-zinc-600" />
                     </div>
                     <div class="space-y-1">
                         <label class="block text-[10px] font-bold text-zinc-400 uppercase">Email Address</label>
                         <input type="email" id="signup-email" placeholder="name@domain.com"
-                            class="w-full p-3.5 rounded-xl border border-zinc-200 bg-zinc-50/50 focus:border-indigo-500 focus:bg-white outline-none font-semibold text-zinc-800" />
+                            class="w-full p-3.5 rounded-xl border border-zinc-200 bg-zinc-50/50 focus:border-indigo-500 focus:bg-white outline-none font-semibold text-zinc-800 placeholder:text-zinc-400 dark:placeholder:text-zinc-600" />
                     </div>
                     <div class="space-y-1">
                         <label class="block text-[10px] font-bold text-zinc-400 uppercase">Password</label>
                         <div class="relative flex items-center">
                             <input type="password" id="signup-password" placeholder="Min. 6 characters"
-                                class="w-full p-3.5 pr-11 rounded-xl border border-zinc-200 bg-zinc-50/50 focus:border-indigo-500 focus:bg-white outline-none font-semibold text-zinc-800" />
+                                class="w-full p-3.5 pr-11 rounded-xl border border-zinc-200 bg-zinc-50/50 focus:border-indigo-500 focus:bg-white outline-none font-semibold text-zinc-800 placeholder:text-zinc-400 dark:placeholder:text-zinc-600" />
                             <button type="button" onclick="togglePasswordVisibility('signup-password', this)" class="absolute right-3.5 text-zinc-400 hover:text-zinc-600 transition-colors">
                                 <i data-lucide="eye" class="w-4 h-4"></i>
                             </button>
@@ -143,7 +173,7 @@
 
             <!-- Middle/Right: Logo "gaytm" -->
             <div class="flex-1 text-right">
-                <span class="lowercase font-black text-2xl tracking-tighter cursor-pointer select-none" style="color: #0d2a6b; font-family: sans-serif;" onclick="switchTab('dashboard')">gay<span style="color: #00baf2;">tm</span></span>
+                <span class="lowercase font-black text-2xl tracking-tighter cursor-pointer select-none text-[#0d2a6b] dark:text-white" style="font-family: sans-serif;" onclick="switchTab('dashboard')">gay<span style="color: #00baf2;">tm</span></span>
             </div>
         </header>
 
@@ -156,50 +186,71 @@
                 <div id="dashboard-content-wrapper" class="space-y-5 hidden">
                     <div class="mb-2">
                         <h2 class="text-2xl font-bold text-zinc-900" id="dash-greeting">Hey, User</h2>
-                        <p class="text-zinc-500 text-sm mt-0.5">Here's your group overview.</p>
-                    </div>
 
-                    <!-- Personal Highlights (Paytm-style colored cards) -->
-                    <div class="grid grid-cols-2 gap-3">
-                        <div class="stat-card-blue p-4 flex flex-col justify-center">
-                            <p class="text-[10px] font-bold text-sky-700 uppercase tracking-wider">Total Spent</p>
-                            <p class="text-2xl font-black text-sky-900 mt-1" id="dash-my-spent">₹0</p>
-                        </div>
-                        <div class="stat-card-pink p-4 flex flex-col justify-center">
-                            <p class="text-[10px] font-bold text-purple-700 uppercase tracking-wider" id="dash-balance-label">Net Balance</p>
-                            <p class="text-2xl font-black text-purple-900 mt-1" id="dash-you-owe">₹0</p>
-                        </div>
-                    </div>
-
-                    <!-- Squad Members -->
-                    <div class="glass-card p-4">
-                        <h3 class="font-black text-zinc-950 dark:text-zinc-50 text-sm mb-3 flex items-center gap-1.5">
-                            <i data-lucide="users" class="w-4 h-4 text-indigo-500"></i> Squad Members
-                        </h3>
-                        <div class="flex flex-wrap gap-3" id="dash-squad-members">
-                            <!-- Injected via JS -->
-                        </div>
                     </div>
 
                     <!-- Pending Join Requests (Admin only) -->
-                    <div id="dash-join-requests" class="glass-card p-4 hidden">
-                        <h3 class="font-black text-zinc-950 dark:text-zinc-50 text-sm mb-3 flex items-center gap-1.5">
-                            <i data-lucide="user-check" class="w-4 h-4 text-amber-500"></i> Pending Requests
+                    <div id="dash-join-requests" class="glass-card p-4 hidden border-red-200 dark:border-red-900/30 bg-red-50/50 dark:bg-red-950/20">
+                        <h3 class="font-black text-red-600 dark:text-red-500 text-sm mb-3 flex items-center gap-1.5 animate-pulse">
+                            <i data-lucide="alert-circle" class="w-4 h-4 text-red-500"></i> <span data-i18n="req_pending">Pending Requests</span>
                         </h3>
                         <div class="space-y-3" id="join-requests-list">
                             <!-- Injected via JS -->
                         </div>
                     </div>
 
+                    <!-- Personal Highlights (Paytm-style colored cards) -->
+                    <div class="grid grid-cols-3 gap-2">
+                        <div class="stat-card-blue p-3 flex flex-col justify-center rounded-xl">
+                            <p class="text-[9px] font-bold text-sky-700 uppercase tracking-wider whitespace-nowrap">Total Spent</p>
+                            <p class="text-lg font-black text-sky-900 mt-0.5" id="dash-my-spent">₹0</p>
+                        </div>
+                        <div class="stat-card-green p-3 flex flex-col justify-center rounded-xl">
+                            <p class="text-[9px] font-bold text-emerald-750 uppercase tracking-wider whitespace-nowrap">You Will Get</p>
+                            <p class="text-lg font-black text-emerald-900 mt-0.5" id="dash-you-will-get">₹0</p>
+                        </div>
+                        <div class="stat-card-orange p-3 flex flex-col justify-center rounded-xl">
+                            <p class="text-[9px] font-bold text-orange-750 uppercase tracking-wider whitespace-nowrap">You Will Give</p>
+                            <p class="text-lg font-black text-orange-900 mt-0.5" id="dash-you-will-give">₹0</p>
+                        </div>
+                    </div>
+
+                    <!-- Group Members -->
+                    <div class="glass-card p-4">
+                        <h3 class="font-black text-zinc-950 dark:text-zinc-50 text-sm mb-3 flex items-center gap-1.5">
+                            <i data-lucide="users" class="w-4 h-4 text-indigo-500"></i> Group Members
+                        </h3>
+                        <div class="flex flex-wrap gap-3" id="dash-group-members">
+                            <!-- Injected via JS -->
+                        </div>
+                    </div>
+
+
+
                     <!-- Expense Breakdown Pie Chart -->
                     <div class="glass-card p-4 flex flex-col hidden" id="dashboard-pie-chart-card">
                         <h3 class="font-black text-zinc-950 dark:text-zinc-50 text-sm mb-3 flex items-center justify-between">
                             <span class="flex items-center gap-1.5"><i data-lucide="pie-chart" class="w-4 h-4 text-indigo-500"></i> My Insights</span>
-                            <select id="chart-mode-select" onchange="setChartMode(this.value)" class="text-[10px] font-bold bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg py-1 px-2 outline-none cursor-pointer">
-                                <option value="category">My Spend Categories</option>
-                                <option value="paid-vs-owed">Paid vs Owed Share</option>
-                                <option value="who-owes-me">Who owes me how much</option>
-                            </select>
+                            <div class="relative inline-block text-left" id="chart-mode-custom-dropdown">
+                                <button onclick="toggleChartDropdown(event)" id="chart-mode-dropdown-btn" class="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-[10px] font-bold text-zinc-800 dark:text-zinc-200 rounded-lg px-2 py-1 shadow-sm outline-none cursor-pointer transition-all hover:bg-zinc-200 dark:hover:bg-zinc-700">
+                                    <span id="chart-mode-dropdown-selected-name">Who owes me how much</span>
+                                    <i data-lucide="chevron-down" class="w-3 h-3 text-zinc-500"></i>
+                                </button>
+                                <div id="chart-mode-dropdown-menu" class="absolute right-0 mt-2 w-48 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-xl hidden z-50 overflow-hidden py-1 transform scale-95 opacity-0 transition-all duration-200 origin-top-right">
+                                    <div onclick="selectChartMode('category', 'My Spend Categories')" class="px-4 py-2.5 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 cursor-pointer flex items-center gap-2">
+                                        <div class="w-2 h-2 rounded-full bg-indigo-500"></div>
+                                        <div class="font-bold text-zinc-800 dark:text-zinc-200 text-[11px]">My Spend Categories</div>
+                                    </div>
+                                    <div onclick="selectChartMode('paid-vs-owed', 'Paid vs Owed Share')" class="px-4 py-2.5 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 cursor-pointer flex items-center gap-2 border-t border-zinc-100 dark:border-zinc-800">
+                                        <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
+                                        <div class="font-bold text-zinc-800 dark:text-zinc-200 text-[11px]">Paid vs Owed Share</div>
+                                    </div>
+                                    <div onclick="selectChartMode('who-owes-me', 'Who owes me how much')" class="px-4 py-2.5 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 cursor-pointer flex items-center gap-2 border-t border-zinc-100 dark:border-zinc-800">
+                                        <div class="w-2 h-2 rounded-full bg-amber-500"></div>
+                                        <div class="font-bold text-zinc-800 dark:text-zinc-200 text-[11px]">Who owes me how much</div>
+                                    </div>
+                                </div>
+                            </div>
                         </h3>
                         <div class="relative w-full h-48 flex items-center justify-center mb-2">
                             <canvas id="expense-pie-chart" class="w-full h-full"></canvas>
@@ -273,10 +324,10 @@
                 </div>
             </div>
 
-            <!-- D. SQUAD PAY HUB -->
+            <!-- D. GROUP PAY HUB -->
             <div id="view-pay" class="view-panel p-6 hidden">
-                <h2 class="text-xl font-bold text-zinc-800 mb-1">The Squad</h2>
-                <p class="text-zinc-500 text-sm mb-6">Grab a UPI ID or scan a QR to pay someone back.</p>
+                <h2 class="text-xl font-bold text-zinc-800 mb-1">The Group</h2>
+
 
                 <div class="grid grid-cols-2 gap-4" id="pay-friends-list">
                     <!-- Friends lists injected here -->
@@ -289,7 +340,7 @@
             <div id="view-groups" class="view-panel p-6 space-y-6 hidden">
                 <div class="text-center py-4">
                     <h3 class="text-xl font-bold text-zinc-800" id="hub-greeting">Group Hub</h3>
-                    <p class="text-zinc-500 text-sm mt-1">Ready to share the good times? Connect with your squad by joining or creating a group below!</p>
+
                 </div>
 
                 <!-- Group Info Header -->
@@ -303,14 +354,18 @@
                     <input type="file" id="group-avatar-upload" accept="image/*" class="hidden" onchange="uploadGroupAvatar(event)" />
                     <div>
                         <h4 id="groups-active-name" class="text-lg font-bold text-zinc-800 dark:text-zinc-200">Group Name</h4>
+                        <p id="groups-active-creator" class="text-[10px] text-zinc-400 dark:text-zinc-500 font-semibold mt-0.5">Created by: Unknown</p>
                         <div class="flex items-center justify-center gap-1.5 mt-1">
                             <span id="groups-active-code" class="text-[10px] bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 font-bold px-2 py-0.5 rounded-md uppercase tracking-wider">CODE</span>
+                            <button onclick="copyGroupCode()" class="text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors" title="Copy Group Code">
+                                <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                            </button>
                         </div>
                     </div>
                     <!-- About Section -->
                     <div class="w-full pt-2 border-t border-zinc-100 dark:border-zinc-800 text-left">
                         <label class="block text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-1">About Group</label>
-                        <p id="groups-about-text" class="text-xs text-zinc-500 dark:text-zinc-400">Welcome to our group! Share details, split bills, and enjoy.</p>
+                        <p id="groups-about-text" class="text-xs text-zinc-500 dark:text-zinc-400"></p>
                         <button id="groups-edit-about-btn" onclick="toggleEditGroupAbout()" class="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline mt-1">Edit About</button>
                         <div id="groups-about-edit-div" class="hidden space-y-2 mt-1.5">
                             <textarea id="groups-about-textarea" rows="2" class="w-full p-2.5 text-xs rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 outline-none text-zinc-800 dark:text-zinc-200 resize-none"></textarea>
@@ -320,12 +375,27 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Member Limit Section (Leader only) -->
+                    <div id="groups-limit-div" class="w-full pt-2 border-t border-zinc-100 dark:border-zinc-800 text-left hidden">
+                        <label class="block text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-1">Group Member Limit</label>
+                        <div class="flex items-center gap-2">
+                            <input type="number" id="groups-limit-input" min="1" placeholder="Unlimited" class="w-24 p-2 text-xs rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 outline-none text-zinc-800 dark:text-zinc-200 font-bold" />
+                            <button onclick="saveGroupLimit()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold px-3 py-2 rounded-lg">Set</button>
+                        </div>
+                    </div>
+
+                    <!-- Member Limit Display (Non-leaders) -->
+                    <div id="groups-limit-display-div" class="w-full pt-2 border-t border-zinc-100 dark:border-zinc-800 text-left hidden text-xs text-zinc-500 dark:text-zinc-400">
+                        <span class="font-bold text-zinc-400 dark:text-zinc-500 uppercase text-[10px] block mb-1">Member Limit</span>
+                        <span id="groups-limit-value">Unlimited</span>
+                    </div>
                 </div>
 
                 <!-- Join Group -->
                 <div class="glass-card p-5 space-y-3 border border-indigo-100 shadow-md">
                     <h4 class="font-bold text-sm text-zinc-800 flex items-center gap-1.5">
-                        <i data-lucide="users" class="w-5 h-5 text-indigo-600"></i> Join Group
+                        <i data-lucide="users" class="w-5 h-5 text-indigo-600"></i> <span data-i18n="btn_join_group">Join Group</span>
                     </h4>
                     <p class="text-xs text-zinc-500">Enter a group code created by your friend to join their group.</p>
                     <div class="flex gap-2">
@@ -337,14 +407,24 @@
                 <!-- Create Group -->
                 <div class="glass-card p-5 space-y-3 border border-purple-100 shadow-md">
                     <h4 class="font-bold text-sm text-zinc-800 flex items-center gap-1.5">
-                        <i data-lucide="plus-circle" class="w-5 h-5 text-purple-600"></i> Create Group
+                        <i data-lucide="plus-circle" class="w-5 h-5 text-purple-600"></i> <span data-i18n="btn_create_group">Create Group</span>
                     </h4>
-                    <p class="text-xs text-zinc-500">Start a new group and choose a group code for your friends.</p>
-                    <div class="space-y-3">
-                        <input type="text" id="create-group-name" placeholder="Group Name (e.g. Goa Trip)" class="w-full p-3 rounded-xl border border-zinc-200 bg-white focus:border-purple-500 outline-none text-sm font-semibold" />
+                    
+                    <div class="space-y-3 mt-1">
+                        <input type="text" id="create-group-name" placeholder="Group Name (e.g. Goa Trip)" class="w-full p-3 rounded-xl border border-zinc-200 bg-white dark:bg-zinc-900/50 dark:border-zinc-700/50 focus:border-purple-500 outline-none text-sm font-semibold" />
                         <div class="flex gap-2">
-                            <input type="text" id="create-group-code" placeholder="Group Code (e.g. GOA2026)" class="flex-1 p-3 rounded-xl border border-zinc-200 bg-white focus:border-purple-500 outline-none text-sm font-bold uppercase tracking-wider" />
-                            <button onclick="createGroup()" class="bg-purple-600 hover:bg-purple-700 text-white px-5 rounded-xl text-sm font-semibold transition-colors active:scale-95">Create</button>
+                            <div class="relative flex-1">
+                                <input type="text" id="create-group-code" data-i18n="lbl_group_code" placeholder="GROUP CODE" class="w-full p-3 pr-20 rounded-xl border border-zinc-200 bg-white dark:bg-zinc-900/50 dark:border-zinc-700/50 focus:border-purple-500 outline-none text-sm font-bold uppercase tracking-wider" />
+                                <div class="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
+                                    <button type="button" onclick="generateUniqueGroupCode()" class="text-amber-500 hover:text-amber-600 p-1.5 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-950/30 transition-colors" title="Generate Unique Code">
+                                        <i data-lucide="sparkles" class="w-4 h-4"></i>
+                                    </button>
+                                    <button type="button" onclick="copyCreateGroupCode()" class="text-zinc-400 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" title="Copy Code">
+                                        <i data-lucide="copy" class="w-4 h-4"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <button onclick="createGroup()" class="bg-purple-600 hover:bg-purple-700 text-white px-5 rounded-xl text-sm font-semibold transition-colors active:scale-95 shrink-0">Create</button>
                         </div>
                     </div>
                 </div>
@@ -354,7 +434,6 @@
                     <h4 class="font-bold text-sm text-zinc-800 flex items-center gap-1.5">
                         <i data-lucide="folder-heart" class="w-5 h-5 text-[#00baf2]"></i> My Active Groups
                     </h4>
-                    <p class="text-xs text-zinc-500">Switch between your active groups or copy their codes below.</p>
                     <div class="space-y-2.5" id="groups-tab-active-list">
                         <!-- Injected via JS -->
                     </div>
@@ -367,74 +446,76 @@
         <nav id="bottom-nav"
             class="glass-header fixed bottom-0 left-0 right-0 px-4 py-2 pb-safe flex justify-between items-center rounded-t-2xl z-30 hidden">
             <button onclick="switchTab('dashboard')"
-                class="nav-btn flex flex-col items-center gap-1 text-indigo-600 w-14" data-tab="dashboard">
+                class="nav-btn flex flex-col items-center gap-1 text-indigo-600 w-14 relative" data-tab="dashboard">
                 <div class="p-1.5 rounded-lg bg-indigo-50 transition-colors icon-bg"><i data-lucide="layout-dashboard"
                         class="w-5 h-5"></i></div>
-                <span class="text-[10px] font-semibold">Home</span>
+                <span id="home-notification-dot" class="absolute top-2 right-4 w-2.5 h-2.5 bg-red-500 rounded-full border border-white dark:border-zinc-900 hidden"></span>
+                <span data-i18n="nav_home" class="text-[10px] font-semibold">Home</span>
             </button>
             <button onclick="switchTab('pay')" class="nav-btn flex flex-col items-center gap-1 text-zinc-400 w-14"
                 data-tab="pay">
                 <div class="p-1.5 rounded-lg transition-colors icon-bg hover:bg-zinc-100"><i data-lucide="scan-line"
                         class="w-5 h-5"></i></div>
-                <span class="text-[10px] font-semibold">Pay</span>
+                <span data-i18n="nav_pay" class="text-[10px] font-semibold">Pay</span>
             </button>
 
             <!-- Floating Action Button (Add Expense) -->
             <div class="relative -top-5">
-                <button onclick="openModal('expense-modal')" class="w-14 h-14 bg-[#00baf2] hover:bg-[#00a3d4] rounded-full shadow-lg shadow-sky-200/40 flex items-center justify-center text-white hover:-translate-y-1 transition-transform active:scale-95">
+                <button onclick="openModal('expense-modal')" class="w-14 h-14 bg-[#00baf2] hover:bg-[#00a3d4] rounded-full shadow-lg shadow-sky-200/40 dark:shadow-none flex items-center justify-center text-white hover:-translate-y-1 transition-transform active:scale-95">
                     <i data-lucide="plus" class="w-6 h-6"></i>
                 </button>
             </div>
 
-            <button onclick="switchTab('moments')" class="nav-btn flex flex-col items-center gap-1 text-zinc-400 w-14"
+            <button onclick="switchTab('moments')" class="nav-btn flex flex-col items-center gap-1 text-zinc-400 w-14 relative"
                 data-tab="moments">
                 <div class="p-1.5 rounded-lg transition-colors icon-bg hover:bg-zinc-100"><i data-lucide="camera"
                         class="w-5 h-5"></i></div>
-                <span class="text-[10px] font-semibold">Feed</span>
+                <span id="feed-notification-dot" class="absolute top-2 right-4 w-2.5 h-2.5 bg-red-500 rounded-full border border-white dark:border-zinc-900 hidden"></span>
+                <span data-i18n="nav_feed" class="text-[10px] font-semibold">Feed</span>
             </button>
             <button onclick="switchTab('groups')" class="nav-btn flex flex-col items-center gap-1 text-zinc-400 w-14"
                 data-tab="groups">
-                <div class="p-1.5 rounded-lg transition-colors icon-bg hover:bg-zinc-100"><i data-lucide="users"
+                <div class="p-1.5 rounded-lg transition-colors icon-bg hover:bg-zinc-100 dark:hover:bg-zinc-800"><i data-lucide="users"
                         class="w-5 h-5"></i></div>
-                <span class="text-[10px] font-semibold">Groups</span>
+                <span data-i18n="nav_groups" class="text-[10px] font-semibold">Groups</span>
             </button>
         </nav>
     </div>
 
     <div id="expense-modal" onclick="closeModal('expense-modal')"
         class="fixed inset-0 bg-zinc-900/50 backdrop-blur-sm flex items-end justify-center z-50 hidden transition-opacity">
-        <div class="bg-white rounded-t-[2rem] p-6 pb-10 w-full max-w-md shadow-2xl transform translate-y-full transition-transform duration-300 relative max-h-[90vh] overflow-y-auto"
+        <div class="bg-white dark:bg-zinc-900 rounded-t-[2rem] p-6 pb-10 w-full max-w-md shadow-2xl transform translate-y-full transition-transform duration-300 relative max-h-[90vh] overflow-y-auto"
             id="expense-modal-content" onclick="event.stopPropagation()">
-            <div class="w-10 h-1 bg-zinc-200 rounded-full mx-auto mb-6"></div>
+            <div class="w-10 h-1 bg-zinc-200 dark:bg-zinc-800 rounded-full mx-auto mb-6"></div>
 
             <div class="flex justify-between items-center mb-6">
-                <h2 class="text-xl font-bold text-zinc-800">Add a Bill</h2>
+                <h2 class="text-xl font-bold text-zinc-800 dark:text-zinc-100">Add a Bill</h2>
                 <button onclick="closeModal('expense-modal')"
-                    class="w-8 h-8 bg-zinc-100 rounded-full flex items-center justify-center text-zinc-500 hover:bg-zinc-200">
+                    class="w-8 h-8 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700">
                     <i data-lucide="x" class="w-4 h-4"></i>
                 </button>
             </div>
 
-            <div class="space-y-5">
+            <div class="space-y-5 text-zinc-800 dark:text-zinc-100">
                 <div>
-                    <label class="block text-xs font-semibold text-zinc-500 uppercase mb-2">What was it for?</label>
+                    <label class="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase mb-2">What was it for?</label>
                     <input type="text" id="expense-desc" placeholder="e.g., Domino's Pizza"
-                        class="w-full p-3.5 rounded-xl border border-zinc-200 bg-zinc-50 focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100 outline-none font-semibold text-zinc-800 transition-all" />
+                        class="w-full p-3.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-black focus:border-indigo-500 focus:bg-white dark:focus:bg-black focus:ring-2 focus:ring-indigo-100 outline-none font-semibold text-zinc-800 dark:text-zinc-100 transition-all" />
                 </div>
 
                 <div>
-                    <label class="block text-xs font-semibold text-zinc-500 uppercase mb-2">Total Amount</label>
+                    <label class="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase mb-2">Total Amount</label>
                     <div class="relative flex items-center">
                         <span class="absolute left-4 text-lg font-bold text-zinc-400">₹</span>
                         <input type="number" id="expense-amount" placeholder="0.00"
-                            class="w-full p-3.5 pl-10 rounded-xl border border-zinc-200 bg-zinc-50 focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100 outline-none font-bold text-xl text-zinc-800 transition-all" />
+                            class="w-full p-3.5 pl-10 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-black focus:border-indigo-500 focus:bg-white dark:focus:bg-black focus:ring-2 focus:ring-indigo-100 outline-none font-bold text-xl text-zinc-800 dark:text-zinc-100 transition-all" />
                     </div>
                 </div>
 
                 <div>
-                    <label class="block text-xs font-semibold text-zinc-500 uppercase mb-2">Category</label>
+                    <label class="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase mb-2">Category</label>
                     <select id="expense-category"
-                        class="w-full p-3.5 rounded-xl border border-zinc-200 bg-zinc-50 focus:border-indigo-500 focus:bg-white outline-none font-semibold text-zinc-800 text-left custom-select transition-all">
+                        class="w-full p-3.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-black focus:border-indigo-500 focus:bg-white dark:focus:bg-black outline-none font-semibold text-zinc-800 dark:text-zinc-100 text-left custom-select transition-all">
                         <option value="Food & Drinks">Food & Drinks 🍔</option>
                         <option value="Shopping">Shopping 🛍️</option>
                         <option value="Travel & Transport">Travel & Transport 🚗</option>
@@ -445,29 +526,43 @@
                 </div>
 
                 <div>
-                    <label class="block text-xs font-semibold text-zinc-500 uppercase mb-2">Any details? (Optional)</label>
+                    <label class="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase mb-2">Any details? (Optional)</label>
                     <textarea id="expense-comment" placeholder="Add extra details..." rows="2"
-                        class="w-full p-3.5 rounded-xl border border-zinc-200 bg-zinc-50 focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100 outline-none text-sm text-zinc-700 transition-all resize-none"></textarea>
+                        class="w-full p-3.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-black dark:text-zinc-100 focus:border-indigo-500 focus:bg-white dark:focus:bg-black focus:ring-2 focus:ring-indigo-100 outline-none text-sm text-zinc-700 dark:text-zinc-300 transition-all resize-none"></textarea>
                 </div>
 
                 <div>
-                    <label class="block text-xs font-semibold text-zinc-500 uppercase mb-2">Attach Receipt / Product Photo (Optional)</label>
-                    <label for="expense-image-input" class="block w-full h-32 rounded-2xl border-2 border-zinc-200 border-dashed bg-zinc-50 hover:bg-zinc-100 dark:bg-zinc-800 dark:border-zinc-700 dark:hover:bg-zinc-750 transition-colors cursor-pointer relative overflow-hidden group">
-                        <img id="expense-image-preview" class="w-full h-full object-contain hidden" />
-                        <div id="expense-image-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-zinc-400 group-hover:scale-105 transition-transform">
-                            <div class="w-8 h-8 bg-white dark:bg-zinc-900 rounded-full shadow-sm flex items-center justify-center mb-1">
-                                <i data-lucide="camera" class="w-4 h-4 text-[#00baf2]"></i>
+                    <label class="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase mb-2">Attach Receipt / Product Photo (Optional)</label>
+                    <div class="relative">
+                        <div class="block w-full h-32 rounded-2xl border-2 border-zinc-200 border-dashed bg-zinc-50 hover:bg-zinc-100 dark:bg-black dark:border-zinc-800 transition-colors relative overflow-hidden group cursor-pointer" onclick="document.getElementById('expense-gallery-input').click()">
+                            <img id="expense-image-preview" class="w-full h-full object-contain hidden" />
+                            <div id="expense-image-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-zinc-400 group-hover:scale-105 transition-transform">
+                                <div class="w-8 h-8 bg-white dark:bg-zinc-900 rounded-full shadow-sm flex items-center justify-center mb-1">
+                                    <i data-lucide="image" class="w-4 h-4 text-[#00baf2]"></i>
+                                </div>
+                                <span class="font-medium text-[10px]">Tap to add receipt photo</span>
                             </div>
-                            <span class="font-medium text-[10px]">Tap to take photo or upload receipt</span>
                         </div>
-                        <input id="expense-image-input" type="file" accept="image/*" capture="environment" class="hidden" onchange="previewExpenseImage(event)" />
-                    </label>
+                        <div class="flex gap-2 mt-2">
+                            <button type="button" onclick="document.getElementById('expense-camera-input').click()" class="flex-1 flex items-center justify-center gap-1.5 bg-zinc-100 hover:bg-zinc-200 dark:bg-black dark:border dark:border-zinc-800 dark:hover:bg-zinc-900 text-zinc-700 dark:text-zinc-200 text-xs font-semibold py-2 rounded-xl transition-colors active:scale-95">
+                                <i data-lucide="camera" class="w-3.5 h-3.5"></i> Camera
+                            </button>
+                            <button type="button" onclick="document.getElementById('expense-gallery-input').click()" class="flex-1 flex items-center justify-center gap-1.5 bg-zinc-100 hover:bg-zinc-200 dark:bg-black dark:border dark:border-zinc-800 dark:hover:bg-zinc-900 text-zinc-700 dark:text-zinc-200 text-xs font-semibold py-2 rounded-xl transition-colors active:scale-95">
+                                <i data-lucide="image" class="w-3.5 h-3.5"></i> Gallery
+                            </button>
+                            <button type="button" id="remove-expense-image-btn" onclick="removeExpenseImage()" class="hidden items-center justify-center gap-1 bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:text-red-400 text-xs font-semibold px-3 py-2 rounded-xl transition-colors active:scale-95">
+                                <i data-lucide="x" class="w-3.5 h-3.5"></i> Remove
+                            </button>
+                        </div>
+                        <input id="expense-camera-input" type="file" accept="image/*" capture="environment" class="hidden" onchange="previewExpenseImage(event)" />
+                        <input id="expense-gallery-input" type="file" accept="image/*" class="hidden" onchange="previewExpenseImage(event)" />
+                    </div>
                 </div>
 
                 <div>
                     <div class="flex justify-between items-end mb-2">
-                        <label class="block text-xs font-semibold text-zinc-500 uppercase">Who's splitting this?</label>
-                        <span class="text-xs text-indigo-600 font-semibold" id="split-count-label">Select members</span>
+                        <label class="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase">Who's splitting this?</label>
+                        <span class="text-xs text-indigo-600 dark:text-indigo-400 font-semibold" id="split-count-label">Select members</span>
                     </div>
                     <p class="text-[11px] text-zinc-400 mb-3 leading-tight">Select everyone who was part of this. We'll split the cost equally.</p>
                     <div id="split-users-container" class="flex flex-wrap gap-2">
@@ -486,37 +581,49 @@
     <!-- 2. Add Moment Modal -->
     <div id="moment-modal" onclick="closeModal('moment-modal')"
         class="fixed inset-0 bg-zinc-900/50 backdrop-blur-sm flex items-end justify-center z-50 hidden transition-opacity">
-        <div class="bg-white rounded-t-[2rem] p-6 pb-10 w-full max-w-md shadow-2xl transform translate-y-full transition-transform duration-300 relative"
+        <div class="bg-white dark:bg-zinc-900 rounded-t-[2rem] p-6 pb-10 w-full max-w-md shadow-2xl transform translate-y-full transition-transform duration-300 relative text-zinc-850 dark:text-zinc-100"
             id="moment-modal-content" onclick="event.stopPropagation()">
-            <div class="w-10 h-1 bg-zinc-200 rounded-full mx-auto mb-6"></div>
+            <div class="w-10 h-1 bg-zinc-200 dark:bg-zinc-800 rounded-full mx-auto mb-6"></div>
 
             <div class="flex justify-between items-center mb-6">
-                <h2 class="text-xl font-bold text-zinc-800">Post a Photo</h2>
+                <h2 class="text-xl font-bold text-zinc-800 dark:text-zinc-100">Post a Photo</h2>
                 <button onclick="closeModal('moment-modal')"
-                    class="w-8 h-8 bg-zinc-100 rounded-full flex items-center justify-center text-zinc-500 hover:bg-zinc-200">
+                    class="w-8 h-8 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700">
                     <i data-lucide="x" class="w-4 h-4"></i>
                 </button>
             </div>
 
             <div class="space-y-4">
-                <label for="moment-image"
-                    class="block w-full h-56 rounded-2xl border-2 border-zinc-200 border-dashed bg-zinc-50 hover:bg-zinc-100 transition-colors cursor-pointer relative overflow-hidden group">
-                    <img id="image-preview" class="w-full h-full object-cover hidden" />
-                    <div id="image-placeholder"
-                        class="absolute inset-0 flex flex-col items-center justify-center text-zinc-400 group-hover:scale-105 transition-transform">
-                        <div class="w-12 h-12 bg-white rounded-full shadow-sm flex items-center justify-center mb-2">
-                            <i data-lucide="image-plus" class="w-6 h-6 text-indigo-500"></i>
+                <div class="relative">
+                    <div class="block w-full h-52 rounded-2xl border-2 border-zinc-200 dark:border-zinc-800 border-dashed bg-zinc-55 dark:bg-black hover:bg-zinc-100 dark:hover:bg-zinc-950 transition-colors relative overflow-hidden group cursor-pointer" onclick="document.getElementById('moment-gallery-input').click()">
+                        <img id="image-preview" class="w-full h-full object-cover hidden" />
+                        <div id="image-placeholder"
+                            class="absolute inset-0 flex flex-col items-center justify-center text-zinc-400 dark:text-zinc-500 group-hover:scale-105 transition-transform">
+                            <div class="w-12 h-12 bg-white dark:bg-black rounded-full shadow-sm flex items-center justify-center mb-2">
+                                <i data-lucide="image-plus" class="w-6 h-6 text-indigo-500"></i>
+                            </div>
+                            <span class="font-medium text-sm">Tap to add a photo</span>
                         </div>
-                        <span class="font-medium text-sm">Tap to add a photo</span>
                     </div>
-                    <input id="moment-image" type="file" accept="image/*" class="hidden"
-                        onchange="previewMomentImage(event)" />
-                </label>
+                    <div class="flex gap-2 mt-2">
+                        <button type="button" onclick="document.getElementById('moment-camera-input').click()" class="flex-1 flex items-center justify-center gap-1.5 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 dark:bg-black dark:border dark:border-zinc-800 dark:hover:bg-zinc-900 dark:text-zinc-200 text-xs font-semibold py-2.5 rounded-xl transition-colors active:scale-95">
+                            <i data-lucide="camera" class="w-3.5 h-3.5"></i> Camera
+                        </button>
+                        <button type="button" onclick="document.getElementById('moment-gallery-input').click()" class="flex-1 flex items-center justify-center gap-1.5 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 dark:bg-black dark:border dark:border-zinc-800 dark:hover:bg-zinc-900 dark:text-zinc-200 text-xs font-semibold py-2.5 rounded-xl transition-colors active:scale-95">
+                            <i data-lucide="image" class="w-3.5 h-3.5"></i> Gallery
+                        </button>
+                        <button type="button" id="remove-moment-image-btn" onclick="removeMomentImage()" class="hidden items-center justify-center gap-1 bg-red-50 hover:bg-red-100 text-red-500 dark:bg-red-950/40 dark:text-red-400 text-xs font-semibold px-3 py-2.5 rounded-xl transition-colors active:scale-95">
+                            <i data-lucide="x" class="w-3.5 h-3.5"></i> Remove
+                        </button>
+                    </div>
+                    <input id="moment-camera-input" type="file" accept="image/*" capture="environment" class="hidden" onchange="previewMomentImage(event)" />
+                    <input id="moment-gallery-input" type="file" accept="image/*" class="hidden" onchange="previewMomentImage(event)" />
+                </div>
 
                 <div>
-                    <label class="block text-xs font-semibold text-zinc-500 uppercase mb-2">Caption</label>
+                    <label class="block text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase mb-2">Caption</label>
                     <input type="text" id="moment-caption" placeholder="What's happening?"
-                        class="w-full p-3.5 rounded-xl border border-zinc-200 bg-zinc-50 focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100 outline-none text-sm text-zinc-800 transition-all" />
+                        class="w-full p-3.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-black focus:border-indigo-500 focus:bg-white dark:focus:bg-black focus:ring-2 focus:ring-indigo-100 outline-none text-sm text-zinc-800 dark:text-zinc-100 transition-all" />
                 </div>
 
                 <button onclick="addMoment()"
@@ -530,31 +637,47 @@
     <!-- 3. Pay/QR Modal -->
     <div id="qr-modal" onclick="closeModal('qr-modal')"
         class="fixed inset-0 bg-zinc-900/60 backdrop-blur-md flex items-center justify-center z-50 hidden transition-opacity p-6">
-        <div class="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl transform scale-95 opacity-0 transition-all duration-300 flex flex-col items-center text-center relative"
+        <div class="bg-white dark:bg-zinc-900 rounded-3xl p-6 w-full max-w-sm shadow-2xl transform scale-95 opacity-0 transition-all duration-300 flex flex-col items-center text-center relative"
             id="qr-modal-content" onclick="event.stopPropagation()">
             <button onclick="closeModal('qr-modal')"
-                class="absolute top-4 right-4 w-8 h-8 bg-zinc-100 rounded-full flex items-center justify-center text-zinc-500 hover:bg-zinc-200">
+                class="absolute top-4 right-4 w-8 h-8 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700">
                 <i data-lucide="x" class="w-4 h-4"></i>
             </button>
 
             <img id="qr-avatar" src=""
-                class="w-16 h-16 rounded-full border-2 border-white shadow-sm object-cover bg-zinc-100 mb-3" />
-            <h3 id="qr-name" class="text-xl font-bold text-zinc-800">Name</h3>
+                class="w-16 h-16 rounded-full border-2 border-white dark:border-zinc-800 shadow-sm object-cover bg-zinc-100 dark:bg-zinc-800 mb-3" />
+            <h3 id="qr-name" class="text-xl font-bold text-zinc-800 dark:text-zinc-200">Name</h3>
 
-            <div class="w-full aspect-square bg-zinc-50 rounded-2xl border border-zinc-100 flex items-center justify-center mt-4 mb-4 p-4">
-                <img id="qr-modal-image" src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=upi://pay?pa=mock@upi&pn=Mock&cu=INR"
-                    class="w-full h-full rounded-xl object-contain mix-blend-multiply opacity-90" />
-            </div>
-
-            <div class="w-full bg-zinc-50 p-3 rounded-xl flex items-center justify-between border border-zinc-200">
-                <div class="text-left overflow-hidden">
-                    <p class="text-[10px] font-bold text-zinc-400 uppercase">UPI ID</p>
-                    <p id="qr-upi" class="font-semibold text-sm text-zinc-800 truncate">mock@upi</p>
-                </div>
-                <button onclick="copyUPI()"
-                    class="text-indigo-600 bg-indigo-50 p-2 rounded-lg hover:bg-indigo-100 transition-colors">
+            <div class="w-full aspect-square bg-zinc-50 dark:bg-white rounded-2xl border border-zinc-100 dark:border-zinc-800 flex items-center justify-center mt-4 mb-4 p-4 relative">
+                <img id="qr-modal-image" src=""
+                    class="w-full h-full rounded-xl object-contain mix-blend-multiply opacity-90 hidden" />
+                <button onclick="copyQR()" class="absolute bottom-2 right-2 text-indigo-600 dark:text-indigo-400 bg-white/90 p-2 rounded-lg hover:bg-white transition-colors shadow-sm" title="Copy QR Code">
                     <i data-lucide="copy" class="w-4 h-4"></i>
                 </button>
+            </div>
+
+            <div class="w-full space-y-2.5">
+                <div class="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-xl flex items-center justify-between border border-zinc-200 dark:border-zinc-700/50">
+                    <div class="text-left overflow-hidden">
+                        <p class="text-[10px] font-bold text-zinc-400 uppercase">UPI ID</p>
+                        <p id="qr-upi" class="font-semibold text-sm text-zinc-800 dark:text-zinc-200 truncate">Not set</p>
+                    </div>
+                    <button onclick="copyUPI()"
+                        class="text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 p-2 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors">
+                        <i data-lucide="copy" class="w-4 h-4"></i>
+                    </button>
+                </div>
+
+                <div class="bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-xl flex items-center justify-between border border-zinc-200 dark:border-zinc-700/50">
+                    <div class="text-left overflow-hidden">
+                        <p class="text-[10px] font-bold text-zinc-400 uppercase">UPI Phone Number</p>
+                        <p id="qr-upi-phone" class="font-semibold text-sm text-zinc-800 dark:text-zinc-200 truncate">Not set</p>
+                    </div>
+                    <button onclick="copyUPIPhone()"
+                        class="text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 p-2 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors">
+                        <i data-lucide="copy" class="w-4 h-4"></i>
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -677,6 +800,107 @@
         </div>
     </div>
 
+    <!-- Reset Password Modal -->
+    <div id="reset-password-modal" onclick="closeModal('reset-password-modal')"
+        class="fixed inset-0 bg-zinc-900/60 backdrop-blur-md flex items-center justify-center z-[110] hidden transition-opacity p-6">
+        <div class="bg-white dark:bg-zinc-900 rounded-3xl p-6 w-full max-w-sm shadow-2xl transform scale-95 opacity-0 transition-all duration-300 flex flex-col items-center text-center relative"
+            id="reset-password-modal-content" onclick="event.stopPropagation()">
+            <h3 class="text-xl font-bold text-zinc-800 dark:text-zinc-100 mb-2">Reset Password</h3>
+            <p class="text-xs text-zinc-500 dark:text-zinc-400 mb-6">Enter your new password below.</p>
+
+            <div class="w-full space-y-4 text-left">
+                <div class="space-y-1">
+                    <label class="block text-[10px] font-bold text-zinc-400 uppercase">New Password</label>
+                    <div class="relative flex items-center">
+                        <input type="password" id="reset-new-password" placeholder="Min. 6 characters"
+                            class="w-full p-3.5 pr-11 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-black focus:border-indigo-500 focus:bg-white dark:focus:bg-black outline-none font-semibold text-zinc-800 dark:text-zinc-100" />
+                        <button type="button" onclick="togglePasswordVisibility('reset-new-password', this)" class="absolute right-3.5 text-zinc-400 hover:text-zinc-600 transition-colors">
+                            <i data-lucide="eye" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <button onclick="submitNewPassword()"
+                class="w-full bg-vibe-gradient text-white p-4 rounded-xl font-semibold shadow-md hover:opacity-95 transition-all active:scale-95 mt-6">
+                Update Password
+            </button>
+        </div>
+    </div>
+
+    <!-- Image Crop Modal -->
+    <div id="crop-modal" onclick="closeModal('crop-modal')"
+        class="fixed inset-0 bg-zinc-900/80 backdrop-blur-md flex items-center justify-center z-[120] hidden transition-opacity p-4">
+        <div class="bg-white dark:bg-zinc-900 rounded-3xl p-5 w-full max-w-md shadow-2xl transform scale-95 opacity-0 transition-all duration-300 flex flex-col items-center relative"
+            id="crop-modal-content" onclick="event.stopPropagation()">
+            <h3 class="text-lg font-bold text-zinc-800 dark:text-zinc-100 mb-2">Select Area to Crop</h3>
+            <p class="text-xs text-zinc-500 mb-4">Drag the image to position it inside the border.</p>
+            <div class="relative w-full aspect-square bg-zinc-950 rounded-2xl overflow-hidden flex items-center justify-center select-none" id="crop-container" style="max-height: 70vh;">
+                <img id="crop-image" class="max-w-full max-h-full object-contain pointer-events-none" style="user-select: none; -webkit-user-drag: none; position: absolute;" />
+                <div id="crop-box" class="absolute border-2 border-dashed border-[#00baf2] flex items-center justify-center pointer-events-none" style="box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);">
+                    <div class="crop-handle crop-handle-tl absolute w-4 h-4 bg-[#00baf2] rounded-full cursor-nwse-resize pointer-events-auto" style="top: -8px; left: -8px;"></div>
+                    <div class="crop-handle crop-handle-tr absolute w-4 h-4 bg-[#00baf2] rounded-full cursor-nesw-resize pointer-events-auto" style="top: -8px; right: -8px;"></div>
+                    <div class="crop-handle crop-handle-bl absolute w-4 h-4 bg-[#00baf2] rounded-full cursor-nesw-resize pointer-events-auto" style="bottom: -8px; left: -8px;"></div>
+                    <div class="crop-handle crop-handle-br absolute w-4 h-4 bg-[#00baf2] rounded-full cursor-nwse-resize pointer-events-auto" style="bottom: -8px; right: -8px;"></div>
+                </div>
+            </div>
+
+            <div class="flex gap-3 w-full mt-5">
+                <button onclick="closeModal('crop-modal')"
+                    class="flex-1 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 py-3 rounded-xl text-sm font-semibold transition-colors">
+                    Cancel
+                </button>
+                <button onclick="performCrop()"
+                    class="flex-1 bg-vibe-gradient text-white py-3 rounded-xl text-sm font-semibold transition-colors shadow-md active:scale-95">
+                    Crop & Save
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chatbox Modal -->
+    <div id="chatbox-modal" onclick="closeModal('chatbox-modal')"
+        class="fixed inset-0 bg-zinc-900/50 backdrop-blur-sm flex items-end justify-center z-50 hidden transition-opacity">
+        <div class="rounded-t-[2rem] p-6 pb-10 w-full max-w-md shadow-2xl transform translate-y-full transition-transform duration-300 relative max-h-[90vh] flex flex-col"
+            id="chatbox-modal-content" onclick="event.stopPropagation()">
+            <div class="w-10 h-1 bg-zinc-200 dark:bg-zinc-800 rounded-full mx-auto mb-4 flex-shrink-0"></div>
+
+            <div class="flex justify-between items-center pb-3 border-b border-zinc-100 dark:border-zinc-800 flex-shrink-0">
+                <div class="flex items-center gap-2.5">
+                    <img id="chatbox-user-avatar" src="" class="w-10 h-10 rounded-full object-cover bg-zinc-100" />
+                    <div class="text-left">
+                        <h3 id="chatbox-user-name" class="font-bold text-zinc-800 dark:text-zinc-200 text-sm">Name</h3>
+                        <p id="chatbox-user-status" class="text-[10px] text-zinc-450 dark:text-zinc-500 font-semibold"></p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="wipeLocalChat()" class="bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-650 dark:text-zinc-300 text-[10px] font-bold px-2.5 py-1.5 rounded-lg transition-colors active:scale-95">
+                        Wipe Chat
+                    </button>
+                    <button id="chatbox-kick-btn" class="bg-red-50 hover:bg-red-100 dark:bg-red-950/40 text-red-650 dark:text-red-400 text-[10px] font-bold px-2.5 py-1.5 rounded-lg transition-colors active:scale-95 hidden">
+                        Kick Out
+                    </button>
+                    <button onclick="closeModal('chatbox-modal')"
+                        class="w-8 h-8 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700">
+                        <i data-lucide="x" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div id="chatbox-messages" class="flex-1 overflow-y-auto p-4 my-2 rounded-2xl border space-y-3 min-h-[250px] max-h-[400px]"
+                style="background:#fdf3c0; border-color:#f0d060;">
+                <!-- Chat messages here -->
+            </div>
+
+            <div class="pt-3 border-t border-zinc-100 dark:border-zinc-800 flex gap-2 flex-shrink-0 items-center">
+                <input type="text" id="chatbox-input" placeholder="Type a message..." class="flex-1 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-black focus:bg-white dark:focus:bg-black focus:border-indigo-500 outline-none text-xs font-semibold text-zinc-800 dark:text-white dark:focus:text-white" onkeydown="if(event.key === 'Enter') { sendChatMessage(); }" />
+                <button onclick="sendChatMessage()" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()" class="bg-green-600 hover:bg-green-700 text-white text-xs font-bold px-4 py-3 rounded-xl transition-colors active:scale-95 flex-shrink-0">
+                    Send
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- 6. Manage Payment QR Modal -->
     <div id="profile-qr-modal" onclick="closeModal('profile-qr-modal')"
         class="fixed inset-0 bg-zinc-900/50 backdrop-blur-sm flex items-end justify-center z-50 hidden transition-opacity">
@@ -696,6 +920,12 @@
                 <div>
                     <label class="block text-xs font-semibold text-zinc-500 uppercase mb-2">UPI ID</label>
                     <input type="text" id="edit-upi-id" placeholder="e.g. name@okaxis"
+                        class="w-full p-3.5 rounded-xl border border-zinc-200 bg-zinc-50 focus:border-indigo-500 focus:bg-white outline-none font-semibold text-zinc-800 transition-all" />
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-500 uppercase mb-2">UPI Phone Number</label>
+                    <input type="text" id="edit-upi-phone" placeholder="Enter phone number"
                         class="w-full p-3.5 rounded-xl border border-zinc-200 bg-zinc-50 focus:border-indigo-500 focus:bg-white outline-none font-semibold text-zinc-800 transition-all" />
                 </div>
 
@@ -809,14 +1039,20 @@
 
             <div class="space-y-5">
                 <div class="flex flex-col items-center gap-3">
-                    <label for="avatar-upload-input" class="relative cursor-pointer group">
+                    <div class="relative group">
                         <img id="avatar-preview-img" src="" class="w-20 h-20 rounded-full object-cover border-4 border-white shadow-md bg-zinc-100 dark:bg-zinc-800" />
-                        <div class="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                            <i data-lucide="camera" class="w-6 h-6 text-white"></i>
-                        </div>
-                    </label>
-                    <input type="file" id="avatar-upload-input" accept="image/*" class="hidden" onchange="previewAvatarUploadImage(event)" />
-                    <span class="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">Tap photo to change</span>
+                    </div>
+                    <div class="flex gap-3 mt-1">
+                        <label for="avatar-camera-input" class="cursor-pointer bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 p-2 rounded-full transition-colors" title="Take Photo">
+                            <i data-lucide="camera" class="w-4 h-4"></i>
+                        </label>
+                        <label for="avatar-gallery-input" class="cursor-pointer bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 p-2 rounded-full transition-colors" title="Choose from Gallery">
+                            <i data-lucide="image" class="w-4 h-4"></i>
+                        </label>
+                    </div>
+                    <input type="file" id="avatar-camera-input" accept="image/*" capture="environment" class="hidden" onchange="previewAvatarUploadImage(event)" />
+                    <input type="file" id="avatar-gallery-input" accept="image/*" class="hidden" onchange="previewAvatarUploadImage(event)" />
+                    <span class="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">Choose an option</span>
                 </div>
 
                 <div>
@@ -828,6 +1064,35 @@
                 <button onclick="saveProfileDetails()"
                     class="w-full bg-zinc-900 dark:bg-zinc-800 text-white p-4 rounded-xl font-semibold shadow-md hover:-translate-y-0.5 transition-transform active:scale-95 mt-2">
                     Save Changes
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chat Message Options Modal -->
+    <div id="chat-msg-options-modal" onclick="closeModal('chat-msg-options-modal')"
+        class="fixed inset-0 bg-zinc-900/50 backdrop-blur-sm flex items-end justify-center z-[60] hidden transition-opacity">
+        <div class="bg-white dark:bg-zinc-900 rounded-t-[2rem] p-6 pb-10 w-full max-w-md shadow-2xl transform translate-y-full transition-transform duration-300 relative"
+            id="chat-msg-options-modal-content" onclick="event.stopPropagation()">
+            <div class="w-10 h-1 bg-zinc-200 dark:bg-zinc-800 rounded-full mx-auto mb-6"></div>
+
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-xl font-bold text-zinc-800 dark:text-zinc-200">Message Options</h2>
+                <button onclick="closeModal('chat-msg-options-modal')"
+                    class="w-8 h-8 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+
+            <div class="space-y-3">
+                <button onclick="editChatMessage()" class="w-full flex items-center justify-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 p-4 rounded-xl font-bold transition-colors">
+                    <i data-lucide="edit-2" class="w-4 h-4"></i> Edit Message
+                </button>
+                <button onclick="unsendChatMessage()" class="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 p-4 rounded-xl font-bold transition-colors">
+                    <i data-lucide="trash-2" class="w-4 h-4"></i> Unsend Message
+                </button>
+                <button onclick="closeModal('chat-msg-options-modal')" class="w-full bg-zinc-100 hover:bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 p-4 rounded-xl font-bold transition-colors mt-2">
+                    Cancel
                 </button>
             </div>
         </div>
@@ -896,7 +1161,7 @@
                                 <i data-lucide="layers" class="w-4 h-4"></i>
                             </div>
                             <div class="text-left">
-                                <p class="font-semibold text-zinc-800 text-xs">My Groups</p>
+                                <p data-i18n="lbl_my_groups" class="font-semibold text-zinc-800 text-xs">My Groups</p>
                                 <p class="text-[10px] text-zinc-500" id="profile-group-text">Group: None</p>
                             </div>
                         </div>
@@ -911,7 +1176,7 @@
                                 <i data-lucide="user-cog" class="w-4 h-4"></i>
                             </div>
                             <div class="text-left">
-                                <p class="font-semibold text-zinc-800 text-xs">Edit Profile</p>
+                                <p data-i18n="lbl_edit_profile" class="font-semibold text-zinc-800 text-xs">Edit Profile</p>
                                 <p class="text-[9px] text-zinc-450 font-medium">Update name & avatar</p>
                             </div>
                         </div>
@@ -930,8 +1195,62 @@
                         </div>
                         <label class="relative inline-flex items-center cursor-pointer">
                             <input type="checkbox" id="theme-toggle-checkbox" class="sr-only peer" onchange="toggleDarkTheme(this.checked)" />
-                            <div class="w-9 h-5 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                            <div class="w-9 h-5 bg-zinc-300 dark:bg-zinc-650 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 dark:after:border-zinc-550 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#00baf2] dark:peer-checked:bg-[#00baf2] border border-zinc-200 dark:border-zinc-700"></div>
                         </label>
+                    </div>
+
+                    <!-- Advanced Settings -->
+                    <div class="glass-card p-3.5 flex flex-col transition-colors cursor-pointer" onclick="toggleAdvancedSettingsDropdown()">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2.5">
+                                <div class="w-8 h-8 bg-slate-50 dark:bg-slate-900/40 rounded-lg flex items-center justify-center text-slate-600 dark:text-slate-400">
+                                    <i data-lucide="settings-2" class="w-4 h-4"></i>
+                                </div>
+                                <div class="text-left">
+                                    <p data-i18n="lbl_advanced" class="font-semibold text-zinc-800 text-xs">Advanced Settings</p>
+                                    <p class="text-[9px] text-zinc-450 font-medium">Extra configurations</p>
+                                </div>
+                            </div>
+                            <i data-lucide="chevron-down" id="advanced-settings-chevron" class="text-zinc-400 w-3.5 h-3.5 transition-transform duration-200"></i>
+                        </div>
+                        
+                        <div id="advanced-settings-dropdown-content" class="hidden mt-3 pt-3 border-t border-zinc-100 dark:border-zinc-800 space-y-2 cursor-default" onclick="event.stopPropagation()">
+                            <div class="glass-card p-3.5 flex items-center justify-between transition-colors">
+                                <div class="flex items-center gap-2.5">
+                                    <div class="w-8 h-8 bg-amber-50 dark:bg-amber-950/20 rounded-lg flex items-center justify-center text-amber-600 dark:text-amber-400">
+                                        <i data-lucide="shield-alert" class="w-4.5 h-4.5"></i>
+                                    </div>
+                                    <div class="text-left">
+                                        <p class="font-semibold text-zinc-800 text-xs">Group-specific QRs</p>
+                                        <p class="text-[9px] text-zinc-500">Enable unique QR for each group</p>
+                                    </div>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="group-specific-qr-toggle" class="sr-only peer" onchange="toggleGroupSpecificQR(this.checked)" />
+                                    <div class="w-9 h-5 bg-zinc-300 dark:bg-zinc-650 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 dark:after:border-zinc-550 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#00baf2] dark:peer-checked:bg-[#00baf2] border border-zinc-200 dark:border-zinc-700"></div>
+                                </label>
+                            </div>
+                            
+                            <!-- AMOLED UI Toggle -->
+                            <div class="glass-card p-3.5 flex items-center justify-between transition-colors">
+                                <div class="flex items-center gap-2.5">
+                                    <div class="w-8 h-8 bg-zinc-800 dark:bg-black rounded-lg flex items-center justify-center text-zinc-300 dark:text-zinc-500">
+                                        <i data-lucide="moon-star" class="w-4.5 h-4.5"></i>
+                                    </div>
+                                    <div class="text-left">
+                                        <p class="font-semibold text-zinc-800 text-xs">AMOLED UI</p>
+                                        <p class="text-[9px] text-zinc-500">Pure black dark mode for battery saving</p>
+                                    </div>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="amoled-ui-toggle" class="sr-only peer" onchange="toggleAmoledUI(this.checked)" />
+                                    <div class="w-9 h-5 bg-zinc-300 dark:bg-zinc-650 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 dark:after:border-zinc-550 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#00baf2] dark:peer-checked:bg-[#00baf2] border border-zinc-200 dark:border-zinc-700"></div>
+                                </label>
+                            </div>
+                            
+
+                            
+                        </div>
                     </div>
 
                     <div class="glass-card p-3.5 flex items-center justify-between text-red-600 hover:bg-red-50 cursor-pointer transition-colors"
@@ -940,7 +1259,7 @@
                             <div class="w-8 h-8 bg-red-50 rounded-lg flex items-center justify-center">
                                 <i data-lucide="log-out" class="w-4 h-4"></i>
                             </div>
-                            <p class="font-semibold text-xs">Log Out</p>
+                            <p data-i18n="btn_logout" class="font-semibold text-xs">Log Out</p>
                         </div>
                     </div>
 
@@ -989,6 +1308,17 @@
     
     <!-- Link to Modular Application Logic -->
     <script src="app.js"></script>
+    
+    <!-- Register Service Worker for PWA (offline capability & installability) -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js')
+                    .then(reg => console.log('Service Worker registered successfully!', reg.scope))
+                    .catch(err => console.error('Service Worker registration failed:', err));
+            });
+        }
+    </script>
 </body>
 
 </html>

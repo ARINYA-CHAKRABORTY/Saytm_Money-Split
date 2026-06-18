@@ -71,6 +71,14 @@ body {
     box-shadow: 0 4px 30px rgba(0, 0, 0, 0.03) !important;
 }
 
+/* iOS PWA Safe Area Utilities */
+header.glass-header {
+    padding-top: calc(0.75rem + env(safe-area-inset-top)) !important;
+}
+.pb-safe {
+    padding-bottom: calc(0.5rem + env(safe-area-inset-bottom)) !important;
+}
+
 .glass-card {
     background: rgba(255, 255, 255, 0.5) !important;
     backdrop-filter: blur(28px) saturate(210%) !important;
@@ -78,7 +86,7 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.45) !important;
     box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
     border-radius: var(--radius);
-    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    transition: all 0.15s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 .glass-card:hover {
@@ -241,9 +249,7 @@ body {
 }
 
 .dark body {
-    background: radial-gradient(circle at 0% 0%, rgba(99, 102, 241, 0.15) 0%, transparent 40%),
-                radial-gradient(circle at 100% 100%, rgba(0, 186, 242, 0.12) 0%, transparent 40%),
-                linear-gradient(135deg, #090a0f 0%, #11121a 100%) !important;
+    background: #000000 !important;
     background-attachment: fixed;
     color: #f3f4f6 !important;
 }
@@ -269,6 +275,31 @@ body {
     -webkit-backdrop-filter: blur(28px) saturate(210%) !important;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
     box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2) !important;
+}
+
+/* AMOLED UI OVERRIDES */
+.amoled-mode body {
+    background: #000000 !important;
+}
+.amoled-mode body::before {
+    display: none !important;
+}
+
+.amoled-mode .glass-card,
+.amoled-mode .moment-card,
+.amoled-mode .glass-header,
+.amoled-mode [id$="-modal-content"],
+.amoled-mode [id$="-drawer-content"] {
+    background: #000000 !important;
+    border-color: #1a1a1a !important;
+    box-shadow: none !important;
+}
+
+.amoled-mode input, 
+.amoled-mode textarea,
+.amoled-mode select {
+    background-color: #0a0a0a !important;
+    border-color: #1a1a1a !important;
 }
 
 .dark input, 
@@ -484,27 +515,7 @@ body {
     border-left: none !important;
 }
 
-/* Premium rainbow neon border tops on all cards in dark mode */
-.dark .glass-card::before,
-.dark #expense-modal-content::before,
-.dark #moment-modal-content::before,
-.dark #qr-modal-content::before,
-.dark #firebase-modal-content::before,
-.dark #groups-modal-content::before,
-.dark #post-detail-modal-content::before,
-.dark #profile-edit-modal-content::before,
-.dark #edit-split-modal-content::before,
-.dark #profile-drawer-content::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 3px;
-    background: linear-gradient(90deg, #ff007f 0%, #7f00ff 30%, #00b9f5 60%, #00ff7f 100%);
-    opacity: 0.8;
-    z-index: 5;
-}
+
 
 .dark .text-zinc-800, 
 .dark .text-zinc-700, 
@@ -635,13 +646,13 @@ select, option {
 .dark .stat-card-orange p,
 .dark .stat-card-orange span,
 .dark .stat-card-orange i {
-    color: #34d399 !important;
+    color: #fb923c !important;
 }
-.dark .stat-card-orange #dash-you-owe {
-    color: #d1fae5 !important;
+.dark .stat-card-orange #dash-you-will-give {
+    color: #ffedd5 !important;
 }
 .dark .stat-card-orange .bg-purple-100 {
-    background-color: rgba(52, 211, 153, 0.15) !important;
+    background-color: rgba(251, 146, 60, 0.15) !important;
 }
 
 .dark .stat-card-green p,
@@ -649,7 +660,7 @@ select, option {
 .dark .stat-card-green i {
     color: #34d399 !important;
 }
-.dark .stat-card-green #dash-you-owe {
+.dark .stat-card-green #dash-you-will-get {
     color: #d1fae5 !important;
 }
 .dark .stat-card-green .bg-purple-100 {
@@ -776,7 +787,7 @@ div[id$="-modal"],
 }
 
 .tab-active-animation {
-    animation: tabFadeInScale 0.25s ease-out forwards;
+    animation: tabFadeInScale 0.15s ease-out forwards;
 }
 
 @keyframes cardEnter {
@@ -791,7 +802,7 @@ div[id$="-modal"],
 }
 
 .moment-card, .glass-card {
-    animation: cardEnter 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    animation: cardEnter 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
 /* Bottom navigation bar micro-interactions */
@@ -811,5 +822,450 @@ div[id$="-modal"],
 /* Button scaling interactions */
 button:active:not(.nav-btn), .pay-btn:active {
     transform: scale(0.96) !important;
+}
+
+/* === FUN UI: Chat Themes === */
+.theme-ocean-gradient .chat-bubble-me {
+    background: linear-gradient(135deg, #0284c7, #0d9488) !important;
+    color: white !important;
+}
+.theme-ocean-gradient .chat-bubble-other {
+    background: linear-gradient(135deg, #e0f2fe, #ccfbf1) !important;
+    color: #0c4a6e !important;
+}
+.dark .theme-ocean-gradient .chat-bubble-other {
+    background: linear-gradient(135deg, #082f49, #134e4a) !important;
+    color: #e0f2fe !important;
+}
+
+.theme-neon-pink .chat-bubble-me {
+    background: linear-gradient(135deg, #db2777, #f43f5e) !important;
+    color: white !important;
+    box-shadow: 0 4px 15px -3px rgba(219, 39, 119, 0.4) !important;
+}
+.dark .stat-card-orange #dash-you-will-give {
+    color: #ffedd5 !important;
+}
+.dark .stat-card-orange .bg-purple-100 {
+    background-color: rgba(251, 146, 60, 0.15) !important;
+}
+
+.dark .stat-card-green p,
+.dark .stat-card-green span,
+.dark .stat-card-green i {
+    color: #34d399 !important;
+}
+.dark .stat-card-green #dash-you-will-get {
+    color: #d1fae5 !important;
+}
+.dark .stat-card-green .bg-purple-100 {
+    background-color: rgba(52, 211, 153, 0.15) !important;
+}
+#profile-edit-modal-content input {
+    background-color: #f9fafb !important;
+    color: #111827 !important;
+    border-color: #e5e7eb !important;
+}
+.dark #profile-edit-modal-content input {
+    background-color: #1a1c29 !important;
+    color: #ffffff !important;
+    border-color: #2b2e42 !important;
+}
+
+/* Upload dashed labels style */
+label[for="expense-image-input"],
+label[for="moment-image"],
+label[for="qr-upload-input"] {
+    background-color: #f9fafb !important;
+    border-color: #e5e7eb !important;
+    color: #4b5563 !important;
+}
+.dark label[for="expense-image-input"],
+.dark label[for="moment-image"],
+.dark label[for="qr-upload-input"] {
+    background-color: #1a1c29 !important;
+    border-color: #2b2e42 !important;
+    color: #a1a1aa !important;
+}
+
+/* Selected split users button chip styling */
+.split-user-btn-selected {
+    background-color: #00baf2 !important;
+    color: #ffffff !important;
+    border-color: #00baf2 !important;
+}
+.dark .split-user-btn-selected {
+    background-color: #6366f1 !important;
+    color: #ffffff !important;
+    border-color: #6366f1 !important;
+}
+
+/* Moments Feed Thick Borders */
+.moment-card {
+    border: 2px solid #ffffff !important;
+}
+.dark .moment-card {
+    border: 2px solid #000000 !important;
+}
+
+/* Pay Button Styling */
+.pay-btn {
+    background-color: #00baf2 !important;
+    color: #ffffff !important;
+}
+.pay-btn:hover {
+    background-color: #00a3d4 !important;
+}
+.dark .pay-btn {
+    background-color: #6366f1 !important;
+    color: #ffffff !important;
+}
+.dark .pay-btn:hover {
+    background-color: #4f46e5 !important;
+}
+
+/* Moments Feed Sticky Header Background */
+#moments-feed-header {
+    background-color: rgba(255, 255, 255, 0.9) !important;
+    border-color: #e5e7eb !important;
+}
+.dark #moments-feed-header {
+    background-color: #000000 !important;
+    border-color: #222433 !important;
+}
+/* Apple-style Glassmorphism Sheets/Modals */
+div[id$="-modal-content"],
+#profile-drawer-content {
+    background: rgba(255, 255, 255, 0.72) !important;
+    backdrop-filter: blur(32px) saturate(210%) !important;
+    -webkit-backdrop-filter: blur(32px) saturate(210%) !important;
+    border: 1px solid rgba(255, 255, 255, 0.5) !important;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+}
+
+.dark div[id$="-modal-content"],
+.dark #profile-drawer-content {
+    background: rgba(24, 24, 28, 0.72) !important;
+    backdrop-filter: blur(32px) saturate(210%) !important;
+    -webkit-backdrop-filter: blur(32px) saturate(210%) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Translucent backdrop overlays matching Apple style */
+div[id$="-modal"],
+#profile-drawer {
+    backdrop-filter: blur(8px) !important;
+    -webkit-backdrop-filter: blur(8px) !important;
+    background: rgba(0, 0, 0, 0.2) !important;
+}
+.dark div[id$="-modal"],
+.dark #profile-drawer {
+    background: rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Show QR change overlay only when preview image is visible */
+#qr-preview-img:not(.hidden) ~ .qr-change-overlay {
+    display: flex !important;
+}
+
+/* Custom Springy enter and micro-interaction animations */
+@keyframes tabFadeInScale {
+    0% {
+        opacity: 0;
+        transform: scale(0.98);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.tab-active-animation {
+    animation: tabFadeInScale 0.15s ease-out forwards;
+}
+
+@keyframes cardEnter {
+    from {
+        opacity: 0;
+        transform: translateY(16px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.moment-card, .glass-card {
+    animation: cardEnter 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* Bottom navigation bar micro-interactions */
+.nav-btn {
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+.nav-btn:active {
+    transform: scale(0.9) !important;
+}
+.nav-btn:hover .icon-bg {
+    transform: scale(1.05);
+}
+.icon-bg {
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+/* Button scaling interactions */
+button:active:not(.nav-btn), .pay-btn:active {
+    transform: scale(0.96) !important;
+}
+
+/* WhatsApp-style Chat Theme (Default) */
+.theme-default .chat-bubble-me,
+.chat-bubble-me {
+    background: #d9fdd3 !important;
+    color: #111b21 !important;
+    border-radius: 12px 12px 0px 12px !important;
+    box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13) !important;
+}
+
+.dark .theme-default .chat-bubble-me,
+.dark .chat-bubble-me {
+    background: #005c4b !important;
+    color: #e9edef !important;
+}
+
+.theme-default .chat-bubble-other,
+.chat-bubble-other {
+    background: #ffffff !important;
+    color: #111b21 !important;
+    border-radius: 12px 12px 12px 0px !important;
+    box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13) !important;
+}
+
+.dark .theme-default .chat-bubble-other,
+.dark .chat-bubble-other {
+    background: #202c33 !important;
+    color: #e9edef !important;
+}
+
+#chatbox-messages.theme-default,
+#chatbox-messages {
+    background-color: #efeae2 !important;
+    border: none !important;
+}
+
+.dark #chatbox-messages.theme-default,
+.dark #chatbox-messages {
+    background-color: #0b141a !important;
+    border: none !important;
+}
+
+/* === FUN UI: Chat Themes === */
+.theme-ocean-gradient .chat-bubble-me {
+    background: linear-gradient(135deg, #0284c7, #0d9488) !important;
+    color: white !important;
+}
+.theme-ocean-gradient .chat-bubble-other {
+    background: linear-gradient(135deg, #e0f2fe, #ccfbf1) !important;
+    color: #0c4a6e !important;
+}
+.dark .theme-ocean-gradient .chat-bubble-other {
+    background: linear-gradient(135deg, #082f49, #134e4a) !important;
+    color: #e0f2fe !important;
+}
+
+.theme-neon-pink .chat-bubble-me {
+    background: linear-gradient(135deg, #db2777, #f43f5e) !important;
+    color: white !important;
+    box-shadow: 0 4px 15px -3px rgba(219, 39, 119, 0.4) !important;
+}
+.theme-neon-pink .chat-bubble-other {
+    background: #fdf2f8 !important;
+    color: #831843 !important;
+    border: 1px solid #fbcfe8 !important;
+}
+.dark .theme-neon-pink .chat-bubble-other {
+    background: #500724 !important;
+    color: #fbcfe8 !important;
+    border: 1px solid #9d174d !important;
+}
+
+.theme-cyberpunk .chat-bubble-me {
+    background: #eab308 !important;
+    color: #000000 !important;
+    border-radius: 0 !important;
+    border: 2px solid #000000 !important;
+}
+.dark .theme-cyberpunk .chat-bubble-me {
+    background: #22d3ee !important;
+    border: 2px solid #000000 !important;
+}
+.theme-cyberpunk .chat-bubble-other {
+    background: #111111 !important;
+    color: #22d3ee !important;
+    border-radius: 0 !important;
+    border: 2px solid #22d3ee !important;
+}
+
+/* === FUN UI: Memory Reactions === */
+.reaction-pill {
+    animation: popIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+@keyframes popIn {
+    0% { transform: scale(0.5); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+.heart-pop {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 50;
+}
+.animate-heart-pop {
+    animation: heartBeat 0.8s ease-out forwards;
+}
+
+@keyframes heartBeat {
+    0% { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+    15% { transform: translate(-50%, -50%) scale(1.2); opacity: 1; }
+    30% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+    50% { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+    100% { transform: translate(-50%, -50%) scale(1.5) translateY(-20px); opacity: 0; }
+}
+
+.emoji-picker-menu {
+    animation: slideUpFade 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+@keyframes slideUpFade {
+    0% { transform: translateY(10px); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
+}
+
+/* Fun UI Settings Dropdown Option Text Visibility Fix */
+#fun-ui-dropdown-menu .font-bold {
+    color: #111827 !important;
+}
+.dark #fun-ui-dropdown-menu .font-bold {
+    color: #f3f4f6 !important;
+}
+
+/* =============================================
+   CHATBOX — Yellow theme (light + dark mode)
+   ============================================= */
+
+/* Chatbox content panel - premium soft cream yellow in both modes */
+#chatbox-modal-content {
+    background: #fffbeb !important; /* warm soft cream */
+    color: #1c1917 !important;      /* dark slate text */
+}
+.dark #chatbox-modal-content {
+    background: #fffbeb !important;
+    color: #1c1917 !important;
+}
+
+/* Chatbox messages area - slightly deeper yellow */
+#chatbox-messages {
+    background: #fef9c3 !important; /* warm yellow */
+    border-color: #fef08a !important;
+}
+.dark #chatbox-messages {
+    background: #fef9c3 !important;
+    border-color: #fef08a !important;
+}
+
+/* User header & info styling */
+#chatbox-user-name {
+    color: #1c1917 !important;
+}
+.dark #chatbox-user-name {
+    color: #1c1917 !important;
+}
+#chatbox-user-status {
+    color: #78716c !important;
+}
+.dark #chatbox-user-status {
+    color: #78716c !important;
+}
+
+/* Chatbox drag handle indicator */
+#chatbox-modal-content > div:first-child {
+    background: #e7e5e4 !important;
+}
+.dark #chatbox-modal-content > div:first-child {
+    background: #e7e5e4 !important;
+}
+
+/* Header & input dividers */
+#chatbox-modal-content .border-b,
+#chatbox-modal-content .border-t {
+    border-color: #e7e5e4 !important;
+}
+.dark #chatbox-modal-content .border-b,
+.dark #chatbox-modal-content .border-t {
+    border-color: #e7e5e4 !important;
+}
+
+/* Input field inside chatbox */
+#chatbox-input {
+    background-color: #ffffff !important;
+    color: #1c1917 !important;
+    border-color: #d6d3d1 !important;
+}
+.dark #chatbox-input {
+    background-color: #ffffff !important;
+    color: #1c1917 !important;
+    border-color: #d6d3d1 !important;
+}
+#chatbox-input::placeholder {
+    color: #a8a29e !important;
+}
+.dark #chatbox-input::placeholder {
+    color: #a8a29e !important;
+}
+
+/* Close/X button inside chatbox */
+#chatbox-modal-content .text-zinc-400 {
+    color: #78716c !important;
+}
+#chatbox-modal-content .text-zinc-400:hover {
+    color: #1c1917 !important;
+}
+
+/* Message bubbles - Yellow theme for BOTH sender and receiver */
+.chat-bubble-me {
+    background-color: #fde047 !important; /* bright warm yellow */
+    color: #1c1917 !important;
+}
+.dark .chat-bubble-me {
+    background-color: #fde047 !important;
+    color: #1c1917 !important;
+}
+
+.chat-bubble-other {
+    background-color: #fef08a !important; /* soft yellow */
+    color: #1c1917 !important;
+}
+.dark .chat-bubble-other {
+    background-color: #fef08a !important;
+    color: #1c1917 !important;
+}
+
+/* Crop Box Resizable Handles Styling */
+.crop-handle {
+    transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.15s ease;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    border: 2px solid #ffffff !important;
+}
+.crop-handle:hover {
+    transform: scale(1.35);
+    background-color: #009ad6 !important;
+}
+.crop-handle:active {
+    transform: scale(1.15);
+    background-color: #0076a3 !important;
 }
 

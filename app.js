@@ -41,6 +41,7 @@ let CURRENT_GROUP_NAME = getUserItem('group_name') || '';
 
 let isSigningIn = false;
 let otpVerified = false;
+let firebaseFallbackMode = false;
 
 // Dynamic State Arrays (populated from group database)
 let users = [];
@@ -52,10 +53,66 @@ let momentImageBase64 = null;
 let qrImageBase64 = null;
 let joinRequests = [];
 let groupAdmin = null;
-let chartMode = 'category';
+let chartMode = 'who-owes-me';
 let expenseImageBase64 = null;
+let settlements = [];
+
+// --- i18n TRANSLATIONS FALLBACK ---
+const enTranslations = {
+    'tab_pay_empty': 'Nothing to pay right now.',
+    'tab_pay_you_owe': 'You Owe',
+    'lbl_you_owe': 'You owe',
+    'btn_pay': 'Pay',
+    'tab_pay_owed_to_you': 'Owed to you',
+    'lbl_owes_you': 'Owes you',
+    'btn_nudge': 'Nudge',
+    'btn_clear_due': 'Clear Due',
+    'req_wants_join': 'wants to join the group',
+    'btn_approve': 'Approve',
+    'btn_reject': 'Reject'
+};
+
+function t(key) {
+    return enTranslations[key] || key;
+}
+
+function formatAmt(val) {
+    const amount = parseFloat(val);
+    if (isNaN(amount)) return '₹0';
+    const absVal = Math.abs(amount);
+    const sign = amount < 0 ? '-' : '';
+
+    let formatted = "";
+    if (absVal >= 10000000) { // 1 Crore
+        formatted = (absVal / 10000000).toFixed(2).replace(/\.00$/, '') + " Crore";
+    } else if (absVal >= 100000) { // 1 Lakh
+        formatted = (absVal / 100000).toFixed(2).replace(/\.00$/, '') + " Lakh";
+    } else {
+        formatted = absVal.toFixed(2);
+    }
+
+    return sign + "₹" + formatted;
+}
+// Language support removed
 
 // --- LOCAL STORAGE DATABASE SIMULATOR (Offline Demo) ---
+function getDefaultAvatar(name) {
+    const letter = (name || 'U').charAt(0).toUpperCase();
+    const bgColors = ['#f87171', '#fb923c', '#fbbf24', '#a3e635', '#34d399', '#2dd4bf', '#38bdf8', '#818cf8', '#a78bfa', '#e879f9', '#f43f5e'];
+    let charCode = 0;
+    if (name) {
+        for (let i = 0; i < name.length; i++) charCode += name.charCodeAt(i);
+    }
+    const bgColor = bgColors[charCode % bgColors.length];
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+        <rect width="100" height="100" fill="${bgColor}"/>
+        <text x="50" y="50" font-family="Inter, Arial, sans-serif" font-size="45" font-weight="bold" fill="white" text-anchor="middle" dominant-baseline="central">${letter}</text>
+    </svg>`;
+
+    return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
 function getLocalDB() {
     let dbStr = localStorage.getItem('gaytm_local_db');
     let dbObj;
@@ -76,36 +133,207 @@ function saveLocalDB(dbObj) {
     localStorage.setItem('gaytm_local_db', JSON.stringify(dbObj));
 }
 
+function handleGroupDeletedRealtime(groupCode) {
+    removeFromUserGroupsList(groupCode);
+    if (CURRENT_GROUP === groupCode) {
+        alert(`The group "${CURRENT_GROUP_NAME || groupCode}" has been deleted by the admin.`);
+        const myGroups = getUserGroupsList().filter(g => g.code !== groupCode);
+        if (myGroups.length > 0) {
+            const nextGroup = myGroups[myGroups.length - 1];
+            CURRENT_GROUP = nextGroup.code;
+            CURRENT_GROUP_NAME = nextGroup.name;
+            setUserItem('group', CURRENT_GROUP);
+            setUserItem('group_name', CURRENT_GROUP_NAME);
+        } else {
+            CURRENT_GROUP = '';
+            CURRENT_GROUP_NAME = '';
+            removeUserItem('group');
+            removeUserItem('group_name');
+        }
+        removeUserItem('pending_request_group');
+        initApp();
+    }
+}
+
+// Called when the current user is detected to have been kicked from a group in real-time
+function handleUserKickedRealtime(groupCode) {
+    const kickedGroupName = CURRENT_GROUP_NAME || groupCode;
+
+    // Remove this group from the user's tracked group list
+    removeFromUserGroupsList(groupCode);
+
+    // Clear any pending request markers for this group
+    const pendingGroup = getUserItem('pending_request_group');
+    if (pendingGroup === groupCode) {
+        removeUserItem('pending_request_group');
+    }
+
+    // If the user is currently viewing the kicked group, route them away
+    if (CURRENT_GROUP === groupCode) {
+        alert(`You have been removed from the group "${kickedGroupName}" by the leader.`);
+
+        // Switch to another available group, or clear
+        const myGroups = getUserGroupsList().filter(g => g.code !== groupCode);
+        if (myGroups.length > 0) {
+            const nextGroup = myGroups[myGroups.length - 1];
+            CURRENT_GROUP = nextGroup.code;
+            CURRENT_GROUP_NAME = nextGroup.name;
+            setUserItem('group', CURRENT_GROUP);
+            setUserItem('group_name', CURRENT_GROUP_NAME);
+        } else {
+            CURRENT_GROUP = '';
+            CURRENT_GROUP_NAME = '';
+            removeUserItem('group');
+            removeUserItem('group_name');
+        }
+
+        // Clear in-memory group data immediately so kicked user cannot interact
+        users = [];
+        expenses = [];
+        moments = [];
+        joinRequests = [];
+        settlements = [];
+        groupChats = [];
+
+        // Unsubscribe any Firebase listeners to fully cut off access
+        if (unsubscribeMembers) { unsubscribeMembers(); unsubscribeMembers = null; }
+        if (unsubscribeExpenses) { unsubscribeExpenses(); unsubscribeExpenses = null; }
+        if (unsubscribeMoments) { unsubscribeMoments(); unsubscribeMoments = null; }
+        if (unsubscribeJoinRequests) { unsubscribeJoinRequests(); unsubscribeJoinRequests = null; }
+        if (unsubscribeSettlements) { unsubscribeSettlements(); unsubscribeSettlements = null; }
+        if (unsubscribeGroup) { unsubscribeGroup(); unsubscribeGroup = null; }
+        if (unsubscribeChats) { unsubscribeChats(); unsubscribeChats = null; }
+
+        // Close any open modals
+        document.querySelectorAll('[id$="-modal"]:not(.hidden)').forEach(m => {
+            m.classList.add('hidden');
+        });
+
+        initApp();
+    }
+}
+
 function syncLocalGroupData() {
     if (usingFirebase) return;
     const dbObj = getLocalDB();
+    if (CURRENT_GROUP && !dbObj.groups[CURRENT_GROUP]) {
+        // In Firebase fallback mode (auth timed out), group data lives in Firestore,
+        // not in local storage. Don't falsely trigger "group deleted" events.
+        if (firebaseFallbackMode) {
+            console.warn("Skipping group-deleted check: running in Firebase fallback mode. Group data is in Firestore, not local storage.");
+            return;
+        }
+        handleGroupDeletedRealtime(CURRENT_GROUP);
+        return;
+    }
     const groupData = dbObj.groups[CURRENT_GROUP];
     if (groupData) {
-        users = groupData.members || [];
+        const freshMembers = groupData.members || [];
+
+        // ── KICK DETECTION (local mode) ──────────────────────────────────────
+        // If we previously had a valid group with members loaded and the current
+        // user is no longer present in the updated member list, they were kicked.
+        if (CURRENT_GROUP && CURRENT_USER && freshMembers.length > 0) {
+            const stillMember = freshMembers.some(
+                m => m.name.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase()
+            );
+            if (!stillMember) {
+                handleUserKickedRealtime(CURRENT_GROUP);
+                return;
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
+        users = freshMembers;
         expenses = groupData.expenses || [];
         moments = groupData.moments || [];
         joinRequests = groupData.joinRequests || [];
+        settlements = groupData.settlements || [];
+        groupChats = groupData.chats || [];
+
+        // Sync chat theme in local simulator mode
+        const themeVal = groupData.chatTheme || 'default';
+        if (themeVal !== CURRENT_CHAT_THEME) {
+            CURRENT_CHAT_THEME = themeVal;
+            const nameMap = {
+                'default': 'Default',
+                'ocean-gradient': 'Ocean Gradient',
+                'neon-pink': 'Neon Pink',
+                'cyberpunk': 'Cyberpunk'
+            };
+            const themeName = nameMap[CURRENT_CHAT_THEME] || 'Default';
+            const themeNameEl = document.getElementById('fun-ui-selected-name');
+            if (themeNameEl) themeNameEl.textContent = themeName;
+        }
     } else {
         users = [];
         expenses = [];
         moments = [];
         joinRequests = [];
+        groupChats = [];
     }
 
     const currentUserObj = users.find(u => u.name === CURRENT_USER);
     if (currentUserObj) {
         document.getElementById('header-avatar').src = currentUserObj.avatar;
         document.getElementById('profile-avatar-large').src = currentUserObj.avatar;
-        document.getElementById('profile-upi').innerText = currentUserObj.upi || 'Add your UPI';
+        document.getElementById('profile-upi').innerText = currentUserObj.upi || currentUserObj.upiPhone || 'Add your UPI';
     }
 
     renderDashboard();
     renderSplit();
     renderMoments();
     renderPay();
-    renderSquadMembers();
+    renderGroupMembers();
     renderJoinRequests();
+    checkFeedNotificationDot();
+    if (isChatboxOpen && activeChatUser) {
+        renderChatMessages();
+    }
 }
+
+// Cross-tab kick detection for local simulator mode:
+// When the leader kicks someone in Tab A, the DB update triggers a storage
+// event in Tab B (the kicked user's tab), causing an immediate re-sync.
+window.addEventListener('storage', (e) => {
+    if (e.key === 'gaytm_local_db' && !usingFirebase) {
+        // ── KICK DETECTION ─────────────────────────────────────────────────
+        if (CURRENT_GROUP) {
+            syncLocalGroupData();
+        }
+        // ── PENDING APPROVAL DETECTION ──────────────────────────────────────
+        // Check if the current user was just approved into their pending group
+        const pendingCode = getUserItem('pending_request_group');
+        if (pendingCode && CURRENT_USER) {
+            try {
+                const dbObj = getLocalDB();
+                const gd = dbObj.groups[pendingCode];
+                if (gd && gd.members) {
+                    const nowMember = gd.members.some(
+                        m => m.name.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase()
+                    );
+                    if (nowMember) {
+                        // We were approved! Switch to that group.
+                        removeUserItem('pending_request_group');
+                        removePendingGroup(pendingCode);
+                        addToUserGroupsList(pendingCode, gd.name || pendingCode);
+                        setUserItem('group', pendingCode);
+                        setUserItem('group_name', gd.name || pendingCode);
+                        CURRENT_GROUP = pendingCode;
+                        CURRENT_GROUP_NAME = gd.name || pendingCode;
+                        // Remove pending banner if visible
+                        const banner = document.getElementById('pending-request-banner');
+                        if (banner) banner.remove();
+                        triggerConfetti();
+                        initApp();
+                    }
+                }
+            } catch (err) {
+                console.error('Pending approval check error:', err);
+            }
+        }
+    }
+});
 
 // --- FIREBASE SERVER SETUP ---
 let usingFirebase = false;
@@ -184,7 +412,7 @@ function initFirebaseInputs() {
     if (usingFirebase) {
         statusEl.innerText = "Firebase Cloud Connected";
         statusEl.className = "text-xs font-semibold text-emerald-600";
-        
+
         const config = JSON.parse(localStorage.getItem('gaytm_firebase_config') || JSON.stringify(defaultFirebaseConfig));
         document.getElementById('fb-apiKey').value = config.apiKey || '';
         document.getElementById('fb-projectId').value = config.projectId || '';
@@ -246,7 +474,7 @@ function formatDate(date) {
     const diffMs = now - date;
     const diffMins = Math.floor(diffMs / 60000);
     const diffHours = Math.floor(diffMins / 60);
-    
+
     if (diffMins < 1) return 'Just now';
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
@@ -257,17 +485,56 @@ let unsubscribeMembers = null;
 let unsubscribeExpenses = null;
 let unsubscribeMoments = null;
 let unsubscribeJoinRequests = null;
+let unsubscribeSettlements = null;
+let unsubscribeGroup = null;
+let unsubscribeChats = null;
+let groupChats = [];
+let activeChatUser = null;
+let activeChatUid = null;
+let isChatboxOpen = false;
+let CURRENT_CHAT_THEME = 'default';
 
 function startFirebaseSync() {
     if (!usingFirebase || !CURRENT_GROUP) return;
+
+    groupAdmin = null; // Reset cached admin on new group sync
 
     // Unsubscribe existing listeners if any
     if (unsubscribeMembers) unsubscribeMembers();
     if (unsubscribeExpenses) unsubscribeExpenses();
     if (unsubscribeMoments) unsubscribeMoments();
     if (unsubscribeJoinRequests) unsubscribeJoinRequests();
+    if (unsubscribeSettlements) unsubscribeSettlements();
+    if (unsubscribeGroup) unsubscribeGroup();
+    if (unsubscribeChats) unsubscribeChats();
 
     const groupRef = db.collection("groups").doc(CURRENT_GROUP);
+
+    // Sync Group Doc to detect real-time deletion and chat themes
+    unsubscribeGroup = groupRef.onSnapshot((doc) => {
+        if (!doc.exists) {
+            handleGroupDeletedRealtime(CURRENT_GROUP);
+        } else {
+            const data = doc.data();
+            if (data.chatTheme && data.chatTheme !== CURRENT_CHAT_THEME) {
+                CURRENT_CHAT_THEME = data.chatTheme;
+                const nameMap = {
+                    'default': 'Default',
+                    'ocean-gradient': 'Ocean Gradient',
+                    'neon-pink': 'Neon Pink',
+                    'cyberpunk': 'Cyberpunk'
+                };
+                const themeName = nameMap[CURRENT_CHAT_THEME] || 'Default';
+                const themeNameEl = document.getElementById('fun-ui-selected-name');
+                if (themeNameEl) themeNameEl.textContent = themeName;
+                if (isChatboxOpen) {
+                    renderChatMessages();
+                }
+            }
+        }
+    }, (error) => {
+        console.error("Firestore group sync error:", error);
+    });
 
     // Cache the group admin for join request rendering
     groupRef.get().then((doc) => {
@@ -275,24 +542,43 @@ function startFirebaseSync() {
             groupAdmin = doc.data().createdBy || null;
             renderJoinRequests(); // Re-render now that we know who's admin
         }
-    }).catch(() => {});
+    }).catch(() => { });
 
     // Sync Group Members
     unsubscribeMembers = groupRef.collection("members").onSnapshot((snapshot) => {
-        users = [];
+        const freshMembers = [];
         snapshot.forEach((doc) => {
-            users.push(doc.data());
+            freshMembers.push(doc.data());
         });
+
+        // ── KICK DETECTION (Firebase mode) ──────────────────────────────────
+        // If the snapshot has members loaded (not an empty initial state)
+        // and the current authenticated user is no longer in the list, they were kicked.
+        if (freshMembers.length > 0 && CURRENT_GROUP && CURRENT_USER) {
+            const currentAuthUser = firebase.auth().currentUser;
+            const currentUid = currentAuthUser ? currentAuthUser.uid : null;
+            const stillMember = freshMembers.some(m => {
+                if (currentUid) return m.uid === currentUid;
+                return m.name.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase();
+            });
+            if (!stillMember) {
+                handleUserKickedRealtime(CURRENT_GROUP);
+                return; // Stop processing — user has been kicked
+            }
+        }
+        // ────────────────────────────────────────────────────────────────────
+
+        users = freshMembers;
         renderSplitUsers(); // Redraw checkbox options in split bill modal
-        renderPay();        // Redraw squad list on Pay tab
-        renderSquadMembers(); // Redraw squad member chips on Dashboard
+        renderPay();        // Redraw group list on Pay tab
+        renderGroupMembers(); // Redraw group member chips on Dashboard
 
         // Keep avatar in sync
         const currentUserObj = users.find(u => usingFirebase ? (u.uid === (firebase.auth().currentUser ? firebase.auth().currentUser.uid : '')) : (u.name === CURRENT_USER));
         if (currentUserObj) {
             document.getElementById('header-avatar').src = currentUserObj.avatar;
             document.getElementById('profile-avatar-large').src = currentUserObj.avatar;
-            document.getElementById('profile-upi').innerText = currentUserObj.upi;
+            document.getElementById('profile-upi').innerText = currentUserObj.upi || currentUserObj.upiPhone || 'Add your UPI';
         }
     }, (error) => {
         console.error("Firestore members sync error:", error);
@@ -336,10 +622,12 @@ function startFirebaseSync() {
                 image: data.image,
                 likes: data.likes || [],
                 comments: data.comments || [],
+                timestamp: data.timestamp ? data.timestamp.toMillis() : Date.now(),
                 time: data.timestamp ? formatDate(data.timestamp.toDate()) : 'Just now'
             });
         });
         renderMoments();
+        checkFeedNotificationDot();
     }, (error) => {
         console.error("Firestore moments sync error:", error);
     });
@@ -353,6 +641,38 @@ function startFirebaseSync() {
         renderJoinRequests();
     }, (error) => {
         console.error("Firestore joinRequests sync error:", error);
+    });
+
+    // Sync Settlements
+    unsubscribeSettlements = groupRef.collection("settlements").onSnapshot((snapshot) => {
+        settlements = [];
+        snapshot.forEach((doc) => {
+            settlements.push(doc.data());
+        });
+        renderPay();
+        renderDashboard();
+    }, () => { /* silent fail */ });
+
+    // Sync Chats from Cloud Firestore
+    unsubscribeChats = groupRef.collection("chats").orderBy("timestamp", "asc").onSnapshot((snapshot) => {
+        groupChats = [];
+        snapshot.forEach((doc) => {
+            const data = doc.data();
+            groupChats.push({
+                id: doc.id,
+                from: data.from,
+                to: data.to,
+                text: data.text,
+                timestamp: data.timestamp ? data.timestamp.toMillis() : Date.now()
+            });
+        });
+        renderGroupMembers();
+        updateHomeNotificationDot();
+        if (isChatboxOpen && activeChatUser) {
+            renderChatMessages();
+        }
+    }, (error) => {
+        console.error("Firestore chats sync error:", error);
     });
 }
 
@@ -375,7 +695,7 @@ function sendEmailOTP(name, email, purpose, authData) {
 
     // Open the OTP Modal
     openModal('otp-modal');
-    
+
     // Clear previous inputs
     const inputs = document.querySelectorAll('.otp-input');
     inputs.forEach(input => input.value = '');
@@ -389,16 +709,18 @@ function sendEmailOTP(name, email, purpose, authData) {
             to_email: email,
             otp_code: generatedOTP
         }, emailPublicKey)
-        .then(() => {
-            console.log("OTP Email sent successfully via EmailJS.");
-        })
-        .catch(err => {
-            console.error("EmailJS sending failed:", err);
-            document.getElementById('otp-description').innerText = `We sent a 6-digit verification code to ${email}. (Sandbox Code: ${generatedOTP})`;
-        });
+            .then(() => {
+                console.log("OTP Email sent successfully via EmailJS.");
+            })
+            .catch(err => {
+                console.error("EmailJS sending failed:", err);
+                document.getElementById('otp-description').innerText = `Failed to send email. Please check your EmailJS configuration.`;
+                alert("Failed to send verification email. Please check your EmailJS settings or internet connection.");
+            });
     } else {
-        // Local Sandbox Mode: Display OTP code directly in the UI text for developer testing
-        document.getElementById('otp-description').innerText = `We sent a 6-digit verification code to ${email}. (Sandbox Code: ${generatedOTP})`;
+        // EmailJS not configured or blocked
+        document.getElementById('otp-description').innerText = `Email service unavailable.`;
+        alert("Email service is currently unavailable. Please check your EmailJS configuration in the Advanced Settings.");
     }
 }
 
@@ -420,7 +742,7 @@ function verifyOTP() {
     // Correct OTP! Let's complete the action
     closeModal('otp-modal');
     otpVerified = true;
-    
+
     const loader = document.getElementById('loader-view');
     const loaderText = document.getElementById('loading-text');
     loader.classList.remove('hidden');
@@ -440,7 +762,7 @@ function verifyOTP() {
                         CURRENT_USER = name;
                         localStorage.setItem('gaytm_user', name);
                         localStorage.setItem('gaytm_user_email', email);
-                        
+
                         setTimeout(() => {
                             loader.classList.add('opacity-0');
                             setTimeout(() => loader.classList.add('hidden'), 400);
@@ -487,47 +809,60 @@ function verifyOTP() {
         const { name, email } = pendingAuthData;
 
         if (usingFirebase) {
-            // In Firebase, we already logged in during intercept. So we just route now.
-            CURRENT_USER = name;
-            // Set user namespace using email so data is scoped per account
-            const userNs = (email || name).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-            localStorage.setItem('gaytm_active_user_ns', userNs);
-            localStorage.setItem('gaytm_user', CURRENT_USER);
-            localStorage.setItem('gaytm_user_email', email);
-            
-            document.getElementById('login-view').classList.add('hidden');
-            document.getElementById('main-app').classList.remove('hidden');
-            
-            const storedGroup = getUserItem('group');
-            if (storedGroup) {
-                CURRENT_GROUP = storedGroup;
-                CURRENT_GROUP_NAME = getUserItem('group_name') || storedGroup;
-            } else {
-                CURRENT_GROUP = '';
-                CURRENT_GROUP_NAME = '';
-            }
-            initApp();
-            
-            setTimeout(() => {
-                loader.classList.add('opacity-0');
-                setTimeout(() => loader.classList.add('hidden'), 400);
-            }, 1000);
-        } else {
-            // Offline Simulator Mode login completion
-            setTimeout(() => {
+            try {
+                // In Firebase, we already logged in during intercept. So we just route now.
                 CURRENT_USER = name;
-                // Scope localStorage to this user's email
+                // Set user namespace using email so data is scoped per account
                 const userNs = (email || name).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
                 localStorage.setItem('gaytm_active_user_ns', userNs);
                 localStorage.setItem('gaytm_user', CURRENT_USER);
                 localStorage.setItem('gaytm_user_email', email);
+
+                document.getElementById('login-view').classList.add('hidden');
+                document.getElementById('main-app').classList.remove('hidden');
+
+                const storedGroup = getUserItem('group');
+                if (storedGroup) {
+                    CURRENT_GROUP = storedGroup;
+                    CURRENT_GROUP_NAME = getUserItem('group_name') || storedGroup;
+                } else {
+                    CURRENT_GROUP = '';
+                    CURRENT_GROUP_NAME = '';
+                }
+                initApp();
+
+                setTimeout(() => {
+                    loader.classList.add('opacity-0');
+                    setTimeout(() => loader.classList.add('hidden'), 400);
+                }, 1000);
+            } catch (err) {
+                console.error("Firebase Auth completion error:", err);
+                loader.classList.add('hidden');
+                alert("Error completing authentication: " + err.message);
+            }
+        } else {
+            // Offline Simulator Mode login completion
+            setTimeout(() => {
+                try {
+                    CURRENT_USER = name;
+                    // Scope localStorage to this user's email
+                    const userNs = (email || name).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+                    localStorage.setItem('gaytm_active_user_ns', userNs);
+                    localStorage.setItem('gaytm_user', CURRENT_USER);
+                    localStorage.setItem('gaytm_user_email', email);
+                } catch (e) {
+                    console.error("Error in verifyOTP:", e);
+                    loader.classList.add('hidden');
+                    alert("Authentication error: " + e.message);
+                    return;
+                }
 
                 loader.classList.add('opacity-0');
                 setTimeout(() => {
                     loader.classList.add('hidden');
                     document.getElementById('login-view').classList.add('hidden');
                     document.getElementById('main-app').classList.remove('hidden');
-                    
+
                     const storedGroup = getUserItem('group');
                     if (storedGroup) {
                         CURRENT_GROUP = storedGroup;
@@ -536,10 +871,21 @@ function verifyOTP() {
                         CURRENT_GROUP = '';
                         CURRENT_GROUP_NAME = '';
                     }
-                    initApp();
+                    try {
+                        initApp();
+                    } catch (e) {
+                        console.error("Error in initApp:", e);
+                        alert("App initialization error: " + e.message);
+                    }
                 }, 400);
             }, 1000);
         }
+    } else if (otpPurpose === 'reset_password') {
+        loader.classList.add('hidden');
+        closeModal('otp-modal');
+        setTimeout(() => {
+            openModal('reset-password-modal');
+        }, 300);
     }
 }
 
@@ -555,7 +901,7 @@ function setupOTPInputBehavior() {
         input.addEventListener('input', (e) => {
             // Only allow numbers
             input.value = input.value.replace(/[^0-9]/g, '');
-            
+
             if (input.value.length === 1 && index < inputs.length - 1) {
                 inputs[index + 1].focus();
             }
@@ -586,7 +932,7 @@ function togglePasswordVisibility(inputElId, btn) {
             icon.setAttribute('data-lucide', 'eye');
         }
     }
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 }
 
 function toggleAuthMode(showLogin) {
@@ -633,19 +979,54 @@ function login() {
             });
     } else {
         // Offline Local Simulator Mode
-        setTimeout(() => {
-            const localUsers = JSON.parse(localStorage.getItem('gaytm_local_users') || '{}');
-            const user = localUsers[email.toLowerCase()];
+        const localUsers = JSON.parse(localStorage.getItem('gaytm_local_users') || '{}');
+        const user = localUsers[email.toLowerCase()];
 
-            if (user && user.password === password) {
-                loader.classList.add('hidden');
-                sendEmailOTP(user.name, email, 'login', { name: user.name, email, password });
-            } else {
+        if (user && user.password === password) {
+            // Password verified — skip OTP for returning users, log in directly
+            setTimeout(() => {
+                try {
+                    CURRENT_USER = user.name;
+                    const userNs = (email || user.name).replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+                    localStorage.setItem('gaytm_active_user_ns', userNs);
+                    localStorage.setItem('gaytm_user', CURRENT_USER);
+                    localStorage.setItem('gaytm_user_email', email);
+                } catch (e) {
+                    loader.classList.add('hidden');
+                    isSigningIn = false;
+                    alert('Login error: ' + e.message);
+                    return;
+                }
+
+                loader.classList.add('opacity-0');
+                setTimeout(() => {
+                    loader.classList.add('hidden');
+                    document.getElementById('login-view').classList.add('hidden');
+                    document.getElementById('main-app').classList.remove('hidden');
+
+                    const storedGroup = getUserItem('group');
+                    if (storedGroup) {
+                        CURRENT_GROUP = storedGroup;
+                        CURRENT_GROUP_NAME = getUserItem('group_name') || storedGroup;
+                    } else {
+                        CURRENT_GROUP = '';
+                        CURRENT_GROUP_NAME = '';
+                    }
+                    try {
+                        initApp();
+                    } catch (e) {
+                        console.error('Error in initApp:', e);
+                        alert('App initialization error: ' + e.message);
+                    }
+                }, 400);
+            }, 800);
+        } else {
+            setTimeout(() => {
                 loader.classList.add('hidden');
                 isSigningIn = false;
-                alert("Login failed: Invalid email or password.");
-            }
-        }, 1000);
+                alert('Login failed: Invalid email or password.');
+            }, 1000);
+        }
     }
 }
 
@@ -691,6 +1072,12 @@ function joinGroup() {
     }
     const groupCode = codeInput.toUpperCase();
 
+    // If we're in Firebase fallback mode, warn the user that joining won't work reliably
+    if (firebaseFallbackMode && !usingFirebase) {
+        alert("⚠️ Firebase is currently unreachable (auth timed out). Please reload the page and try again. If the problem persists, check your internet connection.");
+        return;
+    }
+
     if (usingFirebase) {
         const groupRef = db.collection("groups").doc(groupCode);
         groupRef.get().then((doc) => {
@@ -716,21 +1103,38 @@ function joinGroup() {
                     return;
                 }
 
-                // Not a member — send join request
-                const requestObj = {
-                    uid: currentUser ? currentUser.uid : '',
-                    name: CURRENT_USER,
-                    email: currentUser ? currentUser.email : '',
-                    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${CURRENT_USER}&backgroundColor=c7d2fe`,
-                    requestedAt: firebase.firestore.FieldValue.serverTimestamp()
-                };
+                // Check group member limit first
+                const memberLimit = doc.data().memberLimit || 0;
+                groupRef.collection("members").get().then((membersSnap) => {
+                    if (memberLimit > 0 && membersSnap.size >= memberLimit) {
+                        alert("This group has reached its maximum member limit of " + memberLimit + "!");
+                        return;
+                    }
 
-                groupRef.collection("joinRequests").doc(memberId).set(requestObj).then(() => {
-                    setUserItem('pending_request_group', groupCode);
-                    alert("✅ Join request sent! The group admin needs to approve your request for: " + groupName);
-                    initApp(); // re-route to show pending banner
-                }).catch(err => {
-                    alert("Error sending join request: " + err.message);
+                    // Not a member — send join request
+                    const globalUpi = getUserItem('global_upi') || '';
+                    const globalUpiPhone = getUserItem('global_upi_phone') || '';
+                    const globalQr = getUserItem('global_qr') || '';
+                    const requestObj = {
+                        uid: currentUser ? currentUser.uid : '',
+                        name: CURRENT_USER,
+                        email: currentUser ? currentUser.email : '',
+                        avatar: getDefaultAvatar(CURRENT_USER),
+                        requestedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        upi: globalUpi,
+                        upiPhone: globalUpiPhone,
+                        qrImage: globalQr || ''
+                    };
+
+                    groupRef.collection("joinRequests").doc(memberId).set(requestObj).then(() => {
+                        setUserItem('pending_request_group', groupCode);
+                        addPendingGroup(groupCode, groupName);
+                        alert("✅ Join request sent! The group admin needs to approve your request for: " + groupName);
+                        document.getElementById('join-group-code').value = '';
+                        initApp(); // re-route to show pending banner
+                    }).catch(err => {
+                        alert("Error sending join request: " + err.message);
+                    });
                 });
             }).catch(err => {
                 alert("Error checking membership: " + err.message);
@@ -759,6 +1163,13 @@ function joinGroup() {
             return;
         }
 
+        // Check group member limit first
+        const memberLimit = groupData.memberLimit || 0;
+        if (memberLimit > 0 && groupData.members.length >= memberLimit) {
+            alert("This group has reached its maximum member limit of " + memberLimit + "!");
+            return;
+        }
+
         // Check if already requested
         if (!groupData.joinRequests) groupData.joinRequests = [];
         if (groupData.joinRequests.some(r => r.name.toLowerCase() === CURRENT_USER.toLowerCase())) {
@@ -766,13 +1177,23 @@ function joinGroup() {
             return;
         }
 
-        groupData.joinRequests.push({
+        const globalUpi = getUserItem('global_upi') || '';
+        const globalUpiPhone = getUserItem('global_upi_phone') || '';
+        const globalQr = getUserItem('global_qr') || '';
+        const requestObj = {
             name: CURRENT_USER,
-            avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${CURRENT_USER}&backgroundColor=c7d2fe`,
-            requestedAt: new Date().toISOString()
-        });
+            avatar: getDefaultAvatar(CURRENT_USER),
+            requestedAt: new Date().toISOString(),
+            upi: globalUpi,
+            upiPhone: globalUpiPhone,
+            qrImage: globalQr || ''
+        };
+
+        groupData.joinRequests.push(requestObj);
         saveLocalDB(dbObj);
         setUserItem('pending_request_group', groupCode);
+        addPendingGroup(groupCode, groupData.name);
+        alert("Join request sent! The group creator needs to approve your request.");
         document.getElementById('join-group-code').value = '';
         initApp(); // re-route to show pending banner
     }
@@ -793,6 +1214,13 @@ function createGroup() {
         groupCode = "G" + Math.random().toString(36).substr(2, 5).toUpperCase();
     }
 
+    // Warn if creating a group while Firebase is unreachable — the group would
+    // only exist locally and won't be accessible from other devices.
+    if (firebaseFallbackMode && !usingFirebase) {
+        alert("⚠️ Firebase is currently unreachable. Groups created now will only exist on this device. Please reload the page and try again.");
+        return;
+    }
+
     if (usingFirebase) {
         const groupRef = db.collection("groups").doc(groupCode);
         // Check if group code already exists
@@ -802,22 +1230,33 @@ function createGroup() {
                 return;
             }
 
+            const currentUser = firebase.auth().currentUser;
             groupRef.set({
                 name: groupNameInput,
                 createdBy: CURRENT_USER,
-                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                createdByEmail: currentUser ? currentUser.email : '',
+                createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                memberLimit: 0 // default unlimited
             }).then(() => {
                 const currentUser = firebase.auth().currentUser;
+                const globalUpi = getUserItem('global_upi') || '';
+                const globalUpiPhone = getUserItem('global_upi_phone') || '';
+                const globalQr = getUserItem('global_qr') || '';
                 const newUserObj = {
                     uid: currentUser ? currentUser.uid : '',
                     name: CURRENT_USER,
-                    upi: `${CURRENT_USER.toLowerCase()}@okaxis`,
-                    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${CURRENT_USER}&backgroundColor=c7d2fe`
+                    upi: globalUpi,
+                    upiPhone: globalUpiPhone,
+                    avatar: getDefaultAvatar(CURRENT_USER)
                 };
+                if (globalQr) {
+                    newUserObj.qrImage = globalQr;
+                }
                 const memberId = currentUser ? currentUser.uid : CURRENT_USER;
                 return groupRef.collection("members").doc(memberId).set(newUserObj);
             }).then(() => {
-                addToUserGroupsList(groupCode, groupNameInput);
+                const emailToSave = currentUser ? currentUser.email : '';
+                addToUserGroupsList(groupCode, groupNameInput, emailToSave, CURRENT_USER);
                 setUserItem('group', groupCode);
                 setUserItem('group_name', groupNameInput);
                 CURRENT_GROUP = groupCode;
@@ -838,21 +1277,35 @@ function createGroup() {
             return;
         }
 
+        const globalUpi = getUserItem('global_upi') || '';
+        const globalUpiPhone = getUserItem('global_upi_phone') || '';
+        const globalQr = getUserItem('global_qr') || '';
+        const firstMember = {
+            name: CURRENT_USER,
+            upi: globalUpi,
+            upiPhone: globalUpiPhone,
+            avatar: getDefaultAvatar(CURRENT_USER)
+        };
+        if (globalQr) {
+            firstMember.qrImage = globalQr;
+        }
+
         dbObj.groups[groupCode] = {
             name: groupNameInput,
             createdBy: CURRENT_USER,
-            members: [{
-                name: CURRENT_USER,
-                upi: `${CURRENT_USER.toLowerCase()}@okaxis`,
-                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${CURRENT_USER}&backgroundColor=c7d2fe`
-            }],
+            createdByEmail: localStorage.getItem('gaytm_user_email') || '',
+            createdAt: new Date().toISOString(),
+            memberLimit: 0, // default unlimited
+            members: [firstMember],
             expenses: [],
             moments: [],
+            settlements: [],
             joinRequests: []
         };
         saveLocalDB(dbObj);
 
-        addToUserGroupsList(groupCode, groupNameInput);
+        const emailToSave = localStorage.getItem('gaytm_user_email') || '';
+        addToUserGroupsList(groupCode, groupNameInput, emailToSave, CURRENT_USER);
         setUserItem('group', groupCode);
         setUserItem('group_name', groupNameInput);
         CURRENT_GROUP = groupCode;
@@ -871,10 +1324,34 @@ function getUserGroupsList() {
     }
 }
 
-function addToUserGroupsList(code, name) {
+function addToUserGroupsList(code, name, createdByEmail = '', createdBy = '') {
     const groups = getUserGroupsList();
-    if (!groups.some(g => g.code === code)) {
-        groups.push({ code, name });
+    const existing = groups.find(g => g.code === code);
+    if (!existing) {
+        groups.push({ code, name, createdByEmail, createdBy });
+        setUserItem('user_groups', JSON.stringify(groups));
+    } else {
+        if (createdByEmail && (!existing.createdByEmail || !existing.createdBy)) {
+            existing.createdByEmail = createdByEmail;
+            existing.createdBy = createdBy;
+            setUserItem('user_groups', JSON.stringify(groups));
+        }
+    }
+}
+
+function updateLocalUserGroupCreator(code, createdByEmail, createdBy) {
+    let groups = getUserGroupsList();
+    let updated = false;
+    groups.forEach(g => {
+        if (g.code === code) {
+            if (g.createdByEmail !== createdByEmail || g.createdBy !== createdBy) {
+                g.createdByEmail = createdByEmail;
+                g.createdBy = createdBy;
+                updated = true;
+            }
+        }
+    });
+    if (updated) {
         setUserItem('user_groups', JSON.stringify(groups));
     }
 }
@@ -885,8 +1362,82 @@ function removeFromUserGroupsList(code) {
     setUserItem('user_groups', JSON.stringify(groups));
 }
 
+function getPendingGroups() {
+    try {
+        return JSON.parse(getUserItem('pending_groups') || '[]');
+    } catch (e) {
+        return [];
+    }
+}
+
+function addPendingGroup(code, name, createdByEmail = '', createdBy = '') {
+    const groups = getPendingGroups();
+    const existing = groups.find(g => g.code === code);
+    if (!existing) {
+        groups.push({ code, name, createdByEmail, createdBy });
+        setUserItem('pending_groups', JSON.stringify(groups));
+    } else {
+        if (createdByEmail && (!existing.createdByEmail || !existing.createdBy)) {
+            existing.createdByEmail = createdByEmail;
+            existing.createdBy = createdBy;
+            setUserItem('pending_groups', JSON.stringify(groups));
+        }
+    }
+}
+
+function removePendingGroup(code) {
+    let groups = getPendingGroups();
+    groups = groups.filter(g => g.code !== code);
+    setUserItem('pending_groups', JSON.stringify(groups));
+}
+
 // --- PENDING REQUEST BANNER ---
 let pendingApprovalListener = null;
+
+// Starts a real-time watcher for a pending join-request approval.
+// Works in BOTH Firebase mode (Firestore onSnapshot) and local mode
+// (the storage event already handles it; this handles the Firebase path).
+function startPendingApprovalWatch(groupCode) {
+    if (!groupCode || !CURRENT_USER) return;
+
+    if (usingFirebase && db) {
+        // Firebase: listen on the user's member doc in the pending group.
+        // When it appears, they've been approved.
+        if (pendingApprovalListener) {
+            pendingApprovalListener();
+            pendingApprovalListener = null;
+        }
+        const memberId = firebase.auth().currentUser?.uid || CURRENT_USER;
+        pendingApprovalListener = db
+            .collection('groups').doc(groupCode)
+            .collection('members').doc(memberId)
+            .onSnapshot(doc => {
+                if (doc.exists) {
+                    // Approved!
+                    if (pendingApprovalListener) {
+                        pendingApprovalListener();
+                        pendingApprovalListener = null;
+                    }
+                    removeUserItem('pending_request_group');
+                    removePendingGroup(groupCode);
+                    db.collection('groups').doc(groupCode).get().then(gDoc => {
+                        const gName = gDoc.exists ? (gDoc.data().name || groupCode) : groupCode;
+                        addToUserGroupsList(groupCode, gName);
+                        setUserItem('group', groupCode);
+                        setUserItem('group_name', gName);
+                        CURRENT_GROUP = groupCode;
+                        CURRENT_GROUP_NAME = gName;
+                        // Remove pending banner if visible
+                        const banner = document.getElementById('pending-request-banner');
+                        if (banner) banner.remove();
+                        triggerConfetti();
+                        initApp();
+                    });
+                }
+            }, err => console.log('Approval listener error:', err));
+    }
+    // Local mode: handled by the 'storage' event listener already set up at the top of the file.
+}
 
 function showPendingRequestBanner(groupCode) {
     const wrapper = document.getElementById('dashboard-content-wrapper');
@@ -913,54 +1464,30 @@ function showPendingRequestBanner(groupCode) {
         <button onclick="cancelPendingRequest('${groupCode}')" class="text-red-500 hover:text-red-700 text-xs font-bold px-2.5 py-1 hover:bg-red-50 rounded transition-colors shrink-0">Cancel</button>
     `;
     wrapper.prepend(banner);
-    lucide.createIcons();
-
-    // Set up real-time approval listener in Firebase
-    if (usingFirebase && db) {
-        if (pendingApprovalListener) pendingApprovalListener();
-        
-        const memberId = firebase.auth().currentUser?.uid || CURRENT_USER;
-        pendingApprovalListener = db.collection('groups').doc(groupCode).collection('members').doc(memberId).onSnapshot(doc => {
-            if (doc.exists) {
-                // Approved!
-                if (pendingApprovalListener) {
-                    pendingApprovalListener();
-                    pendingApprovalListener = null;
-                }
-                removeUserItem('pending_request_group');
-                setUserItem('group', groupCode);
-                
-                db.collection('groups').doc(groupCode).get().then(gDoc => {
-                    const name = gDoc.exists ? (gDoc.data().name || groupCode) : groupCode;
-                    setUserItem('group_name', name);
-                    CURRENT_GROUP = groupCode;
-                    CURRENT_GROUP_NAME = name;
-                    
-                    // Trigger success animation
-                    triggerConfetti();
-                    initApp();
-                });
-            }
-        }, err => console.log("Approval listener error:", err));
-    }
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
+    // Note: real-time approval watching is handled by startPendingApprovalWatch()
+    // which is called by initApp() right after showPendingRequestBanner().
 }
 
 function cancelPendingRequest(groupCode) {
     if (!confirm('Are you sure you want to cancel your join request?')) return;
-    
+
     if (pendingApprovalListener) {
         pendingApprovalListener();
         pendingApprovalListener = null;
     }
-    
+
     removeUserItem('pending_request_group');
-    
+    removePendingGroup(groupCode);
+
     const existingBanner = document.getElementById('pending-request-banner');
     if (existingBanner) existingBanner.remove();
 
     if (usingFirebase && db) {
         const memberId = firebase.auth().currentUser?.uid || CURRENT_USER;
-        db.collection('groups').doc(groupCode).collection('joinRequests').doc(memberId).delete().catch(() => {});
+        db.collection('groups').doc(groupCode).collection('joinRequests').doc(memberId).delete().then(() => {
+            renderMyGroups();
+        }).catch(() => { });
     } else {
         const dbObj = getLocalDB();
         const gd = dbObj.groups[groupCode];
@@ -968,6 +1495,7 @@ function cancelPendingRequest(groupCode) {
             gd.joinRequests = gd.joinRequests.filter(r => r.name !== CURRENT_USER);
             saveLocalDB(dbObj);
         }
+        renderMyGroups();
     }
     initApp();
 }
@@ -975,7 +1503,8 @@ function cancelPendingRequest(groupCode) {
 // --- DELETE / WIPE GROUP ---
 function deleteGroupCompletely() {
     if (!CURRENT_GROUP) { alert('No active group to delete.'); return; }
-    const isAdmin = getGroupAdmin() === CURRENT_USER;
+    const admin = getGroupAdmin();
+    const isAdmin = admin && admin.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase();
     if (!isAdmin) { alert('Only the group creator can delete the group.'); return; }
 
     if (!confirm(`⚠️ This will PERMANENTLY DELETE the group "${CURRENT_GROUP_NAME}" and ALL its data (expenses, members, moments). This cannot be undone.\n\nAre you absolutely sure?`)) return;
@@ -1008,7 +1537,8 @@ function deleteGroupCompletely() {
 
 function wipeGroupData() {
     if (!CURRENT_GROUP) { alert('No active group.'); return; }
-    const isAdmin = getGroupAdmin() === CURRENT_USER;
+    const admin = getGroupAdmin();
+    const isAdmin = admin && admin.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase();
     if (!isAdmin) { alert('Only the group creator can wipe data.'); return; }
 
     if (!confirm(`This will delete ALL expenses and moments from "${CURRENT_GROUP_NAME}" but KEEP the group and its members.\n\nContinue?`)) return;
@@ -1058,7 +1588,7 @@ function leaveGroup() {
     removeUserItem('pending_request_group');
     CURRENT_GROUP = '';
     CURRENT_GROUP_NAME = '';
-    
+
     // Clean dynamic UI lists
     users = [];
     expenses = [];
@@ -1079,6 +1609,14 @@ function leaveGroup() {
 function logout() {
     isSigningIn = false;
     otpVerified = false;
+
+    // Force-hide the profile drawer instantly (no animation delay)
+    // The drawer is a fixed overlay outside main-app, so it must be
+    // explicitly hidden before the login page is shown.
+    const _drawer = document.getElementById('profile-drawer');
+    const _drawerContent = document.getElementById('profile-drawer-content');
+    if (_drawer) _drawer.classList.add('hidden');
+    if (_drawerContent) _drawerContent.classList.add('-translate-x-full');
 
     if (usingFirebase) {
         firebase.auth().signOut().then(() => {
@@ -1104,7 +1642,7 @@ function logout() {
 
         document.getElementById('main-app').classList.add('hidden');
         document.getElementById('login-view').classList.remove('hidden');
-        
+
         // Reset input fields
         document.getElementById('login-email').value = '';
         document.getElementById('login-password').value = '';
@@ -1130,6 +1668,19 @@ function copyGroupCode() {
 }
 
 function initApp() {
+    // Language removed
+    // Auto-select last joined group if CURRENT_GROUP is empty but user has groups
+    if (!CURRENT_GROUP) {
+        const myGroups = getUserGroupsList();
+        if (myGroups && myGroups.length > 0) {
+            const lastGroup = myGroups[myGroups.length - 1];
+            CURRENT_GROUP = lastGroup.code;
+            CURRENT_GROUP_NAME = lastGroup.name;
+            setUserItem('group', CURRENT_GROUP);
+            setUserItem('group_name', CURRENT_GROUP_NAME);
+        }
+    }
+
     // Clear old banners to prevent duplication
     const existingPending = document.getElementById('pending-request-banner');
     if (existingPending) existingPending.remove();
@@ -1139,7 +1690,7 @@ function initApp() {
     document.getElementById('dash-greeting').innerText = `Hey, ${CURRENT_USER}`;
     document.getElementById('profile-name').innerText = CURRENT_USER;
     document.getElementById('hub-greeting').innerText = `Welcome, ${CURRENT_USER}!`;
-    
+
     // Set profile email
     const emailEl = document.getElementById('profile-email');
     if (emailEl) {
@@ -1150,7 +1701,12 @@ function initApp() {
     const isDark = localStorage.getItem('gaytm_theme') === 'dark';
     const toggle = document.getElementById('theme-toggle-checkbox');
     if (toggle) toggle.checked = isDark;
-    
+
+    // Sync Advanced Settings QR toggle state
+    const isGroupSpecific = localStorage.getItem('gaytm_group_specific_qr') === 'true';
+    const qrToggle = document.getElementById('group-specific-qr-toggle');
+    if (qrToggle) qrToggle.checked = isGroupSpecific;
+
     const botNav = document.getElementById('bottom-nav');
     const dashContentWrapper = document.getElementById('dashboard-content-wrapper');
 
@@ -1166,7 +1722,7 @@ function initApp() {
         if (groupNameEl) groupNameEl.innerText = CURRENT_GROUP_NAME;
         document.getElementById('header-group-code').innerText = `Code: ${CURRENT_GROUP}`;
         document.getElementById('profile-group-text').innerText = `Group: ${CURRENT_GROUP_NAME} (${CURRENT_GROUP})`;
-        
+
         populateHeaderGroupSelect();
 
         initFirebaseInputs();
@@ -1176,9 +1732,18 @@ function initApp() {
         } else {
             syncLocalGroupData();
         }
-        
+
         // Ensure we show dashboard
         switchTab('dashboard', false);
+
+        // ── ALSO watch any pending join-request for a DIFFERENT group ──
+        // Existing users who already have an active group may still be
+        // waiting for approval into a second group.  We must set up the
+        // approval listener even when CURRENT_GROUP is already set.
+        const pendingReqGroupForExistingUser = getUserItem('pending_request_group');
+        if (pendingReqGroupForExistingUser && pendingReqGroupForExistingUser !== CURRENT_GROUP) {
+            startPendingApprovalWatch(pendingReqGroupForExistingUser);
+        }
     } else {
         // No Group: nav is visible
         if (botNav) botNav.classList.remove('hidden');
@@ -1198,9 +1763,10 @@ function initApp() {
         // Check if user has a pending join request
         const pendingReqGroup = getUserItem('pending_request_group');
         if (pendingReqGroup) {
-            // Show dashboard with pending-request banner
+            // Show dashboard with pending-request banner AND start watching for approval
             switchTab('dashboard', false);
             showPendingRequestBanner(pendingReqGroup);
+            startPendingApprovalWatch(pendingReqGroup);
         } else {
             // Brand-new user: go to groups setup tab
             switchTab('groups', false);
@@ -1231,7 +1797,7 @@ function initApp() {
         renderSplit();
         renderMoments();
         renderPay();
-        renderSquadMembers();
+        renderGroupMembers();
         renderJoinRequests();
     }
     // Pre-select current user by default for expenses
@@ -1241,9 +1807,9 @@ function initApp() {
     // Render active groups list & current group details info card
     renderMyGroups();
     renderGroupInfo();
-    
+
     // Refresh Lucide Icons for dynamically rendered controls
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 }
 
 // --- NAVIGATION LOGIC ---
@@ -1265,6 +1831,16 @@ function switchTab(tabId, pushHistory = true) {
     if (tabId === 'groups') {
         renderMyGroups();
         renderGroupInfo();
+    }
+
+    if (tabId === 'moments') {
+        if (CURRENT_GROUP) {
+            localStorage.setItem('gaytm_last_feed_viewed_' + CURRENT_GROUP, Date.now().toString());
+        }
+        const dot = document.getElementById('feed-notification-dot');
+        if (dot) {
+            dot.classList.add('hidden');
+        }
     }
 
     document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -1333,36 +1909,32 @@ function calculatePersonalBalances() {
 function renderDashboard() {
     const { myTotalSpent } = calculatePersonalBalances();
 
-    document.getElementById('dash-my-spent').innerText = `₹${myTotalSpent.toFixed(2)}`;
-
-    const balEl = document.getElementById('dash-you-owe');
-    const labelEl = document.getElementById('dash-balance-label');
-    const parentCard = balEl?.parentElement?.parentElement; // the stat card div
+    document.getElementById('dash-my-spent').innerText = formatAmt(myTotalSpent);
 
     // Calculate netting balances first to get correct netted netBalance
-    const { netBalance: nettedNetBalance } = renderSettlementBreakdown();
+    renderSettlementBreakdown();
 
-    if (balEl) {
-        if (nettedNetBalance < 0) {
-            balEl.innerText = `₹${Math.abs(nettedNetBalance).toFixed(2)}`;
-            if (labelEl) labelEl.innerText = "You Owe";
-            if (parentCard) parentCard.className = 'stat-card-orange p-4 flex flex-col justify-between';
-        } else if (nettedNetBalance > 0) {
-            balEl.innerText = `₹${nettedNetBalance.toFixed(2)}`;
-            if (labelEl) labelEl.innerText = "You Are Owed";
-            if (parentCard) parentCard.className = 'stat-card-green p-4 flex flex-col justify-between';
-        } else {
-            balEl.innerText = `₹0.00`;
-            if (labelEl) labelEl.innerText = "All Settled";
-            if (parentCard) parentCard.className = 'stat-card-pink p-4 flex flex-col justify-between';
+    let youWillGet = 0;
+    let youWillGive = 0;
+    const netDebts = calculateNetDebts();
+    netDebts.forEach(d => {
+        if (d.from.toLowerCase() === CURRENT_USER.toLowerCase()) {
+            youWillGive += d.amount;
+        } else if (d.to.toLowerCase() === CURRENT_USER.toLowerCase()) {
+            youWillGet += d.amount;
         }
-    }
+    });
+
+    const getEl = document.getElementById('dash-you-will-get');
+    const giveEl = document.getElementById('dash-you-will-give');
+    if (getEl) getEl.innerText = formatAmt(youWillGet);
+    if (giveEl) giveEl.innerText = formatAmt(youWillGive);
 
     // Show admin danger zone if user is the group creator
     const dangerZone = document.getElementById('admin-danger-zone');
     if (dangerZone) {
         const admin = getGroupAdmin();
-        if (admin && admin === CURRENT_USER) {
+        if (admin && admin.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase()) {
             dangerZone.classList.remove('hidden');
         } else {
             dangerZone.classList.add('hidden');
@@ -1390,7 +1962,7 @@ function renderDashboard() {
     }
     // Refresh Pie Chart
     renderExpensePieChart();
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 }
 
 function renderSplit() {
@@ -1411,6 +1983,8 @@ function renderSplit() {
         emptyEl.classList.add('hidden');
         emptyEl.classList.remove('flex');
 
+        const globalNetDebts = calculateNetDebts();
+
         myExpenses.forEach(exp => {
             const isMe = exp.paidBy === CURRENT_USER;
             const splitAmount = exp.amount / exp.splitWith.length;
@@ -1421,8 +1995,8 @@ function renderSplit() {
             if (isMe) {
                 const amountLent = exp.amount - (exp.splitWith.includes(CURRENT_USER) ? splitAmount : 0);
                 myStatus = amountLent > 0 ? `Lent ₹${amountLent.toFixed(2)}` : "Covered myself";
-                myStatusColor = amountLent > 0 
-                    ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-200/40 dark:border-emerald-800/30 text-[10px] uppercase tracking-wide font-black" 
+                myStatusColor = amountLent > 0
+                    ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-200/40 dark:border-emerald-800/30 text-[10px] uppercase tracking-wide font-black"
                     : "bg-zinc-100 text-zinc-650 dark:bg-zinc-800/40 dark:text-zinc-400 px-2.5 py-0.5 rounded-full border border-zinc-200/40 dark:border-zinc-700/30 text-[10px] uppercase tracking-wide font-black";
             } else {
                 myStatus = `Borrowed ₹${splitAmount.toFixed(2)}`;
@@ -1452,13 +2026,19 @@ function renderSplit() {
                 `;
             }
 
-            // Edit split button if created by current user
+            // Edit split and delete buttons if created by current user
             let editSplitBtn = '';
             if (isMe) {
                 editSplitBtn = `
-                    <button onclick="openEditSplitModal('${exp.id}')" class="text-[10px] font-bold text-indigo-600 hover:underline flex items-center gap-1 mt-1.5">
-                        <i data-lucide="edit-3" class="w-2.5 h-2.5"></i> Edit Split Members
-                    </button>
+                    <div class="flex items-center gap-3 mt-1.5 flex-wrap">
+                        <button onclick="openEditSplitModal('${exp.id}')" class="text-[10px] font-bold text-indigo-600 hover:underline flex items-center gap-1">
+                            <i data-lucide="edit-3" class="w-2.5 h-2.5"></i> Edit Split Members
+                        </button>
+                        <span class="text-zinc-300 dark:text-zinc-700 text-[10px]">|</span>
+                        <button onclick="deleteExpense('${exp.id}')" class="text-[10px] font-bold text-red-650 dark:text-red-400 hover:underline flex items-center gap-1">
+                            <i data-lucide="trash-2" class="w-2.5 h-2.5"></i> Delete Bill
+                        </button>
+                    </div>
                 `;
             }
 
@@ -1468,22 +2048,53 @@ function renderSplit() {
                 </div>
             ` : '';
 
+            const payer = exp.paidBy;
+            let splitDetailsHtml = `<div class="mt-2 bg-zinc-50 dark:bg-zinc-900/50 rounded-lg p-2.5 space-y-2 hidden border border-zinc-100 dark:border-zinc-800" id="split-details-${exp.id}">`;
+
+            exp.splitWith.forEach(member => {
+                if (member.toLowerCase() === payer.toLowerCase()) {
+                    splitDetailsHtml += `
+                        <div class="flex justify-between items-center text-[10px]">
+                            <span class="font-bold text-zinc-700 dark:text-zinc-300">${member}</span>
+                            <span class="text-indigo-600 dark:text-indigo-400 font-black tracking-wide uppercase">Paid</span>
+                        </div>
+                    `;
+                } else {
+                    const owesPayer = globalNetDebts.find(d => d.from.toLowerCase() === member.toLowerCase() && d.to.toLowerCase() === payer.toLowerCase());
+                    const isCleared = !owesPayer || owesPayer.amount <= 0;
+                    const statusText = isCleared ? "Cleared" : "Not Cleared";
+                    const statusColor = isCleared ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400";
+
+                    splitDetailsHtml += `
+                        <div class="flex justify-between items-center text-[10px]">
+                            <span class="font-semibold text-zinc-700 dark:text-zinc-300">${member}</span>
+                            <span class="${statusColor} font-bold uppercase tracking-wide">${statusText}</span>
+                        </div>
+                    `;
+                }
+            });
+            splitDetailsHtml += `</div>`;
+
             listEl.innerHTML += `
                 <div class="glass-card p-4 flex flex-col justify-between">
                     <div class="flex items-start gap-3 w-full">
-                        <div class="w-10 h-10 bg-zinc-100 dark:bg-zinc-800 rounded-lg flex items-center justify-center text-zinc-500 flex-shrink-0 mt-1">
-                            <i data-lucide="receipt" class="w-5 h-5 text-indigo-500"></i>
-                        </div>
                         <div class="flex-1 text-left">
-                            <div class="flex justify-between items-start">
-                                <h4 class="font-black text-zinc-950 dark:text-zinc-50 text-sm">${exp.desc} <span class="text-sm font-black text-indigo-600 dark:text-indigo-400">(Paid by ${isMe ? 'You' : exp.paidBy})</span></h4>
-                                <p class="font-black text-base text-zinc-950 dark:text-zinc-50">₹${exp.amount.toFixed(2)}</p>
+                            <div class="flex justify-between items-start gap-2">
+                                <div class="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
+                                    <h4 class="font-black text-zinc-950 dark:text-zinc-50 text-base leading-tight">${exp.desc} <span class="text-[11px] font-bold text-indigo-600 dark:text-indigo-400">(Paid by ${isMe ? 'You' : exp.paidBy})</span></h4>
+                                    <button onclick="document.getElementById('split-details-${exp.id}').classList.toggle('hidden'); lucide.createIcons();" class="flex items-center justify-center gap-1 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 transition-colors text-[9px] text-zinc-600 dark:text-zinc-300 font-bold uppercase px-2 py-1 rounded-md w-fit whitespace-nowrap">
+                                        ${exp.splitWith.length} peoples <i data-lucide="chevron-down" class="w-3 h-3"></i>
+                                    </button>
+                                </div>
+                                <div class="flex flex-col items-end gap-1.5 shrink-0">
+                                    <p class="font-black text-lg text-zinc-950 dark:text-zinc-50">₹${exp.amount.toFixed(2)}</p>
+                                    <span class="${myStatusColor}">${myStatus}</span>
+                                </div>
                             </div>
                             ${commentHtml}
                             ${imageHtml}
-                            <div class="mt-2.5 flex justify-between items-center border-t border-zinc-100 dark:border-zinc-850 pt-2.5">
-                                <p class="text-[10px] text-zinc-800 dark:text-zinc-300 font-black uppercase tracking-wider">Split with ${exp.splitWith.length} friends</p>
-                                <span class="${myStatusColor}">${myStatus}</span>
+                            <div class="mt-1 flex flex-col">
+                                ${splitDetailsHtml}
                             </div>
                             ${editSplitBtn}
                             ${expenseCommentsHtml}
@@ -1498,7 +2109,7 @@ function renderSplit() {
             `;
         });
     }
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 }
 
 // In-memory comments store (keyed by moment id)
@@ -1521,7 +2132,7 @@ function renderMoments() {
                 <p class="text-xs">Be the first to share a moment!</p>
             </div>
         `;
-        lucide.createIcons();
+        if (typeof lucide !== 'undefined') { lucide.createIcons(); }
         return;
     }
 
@@ -1534,7 +2145,7 @@ function renderMoments() {
         if (!m.comments) m.comments = [];
 
         const userObj = users.find(u => u.name === m.user);
-        const avatarSrc = userObj?.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${m.user}&backgroundColor=c7d2fe`;
+        const avatarSrc = userObj?.avatar || getDefaultAvatar(m.user);
         const isMe = m.user === CURRENT_USER;
         // Comments HTML list
         let commentsHtml = '';
@@ -1586,13 +2197,35 @@ function renderMoments() {
 
             <!-- Card Image -->
             ${m.image ? `
-                <div class="w-full overflow-hidden bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center h-[450px]">
-                    <img src="${m.image}" class="w-full h-full object-contain" />
+                <div class="w-full overflow-hidden bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center h-[450px] relative select-none" 
+                     onmousedown="startMomentLongPress('${momentId}', event)" 
+                     onmouseup="cancelMomentLongPress()" 
+                     onmouseleave="cancelMomentLongPress()" 
+                     ontouchstart="startMomentLongPress('${momentId}', event)" 
+                     ontouchend="cancelMomentLongPress()" 
+                     ontouchmove="cancelMomentLongPress()">
+                    <img src="${m.image}" class="w-full h-full object-contain pointer-events-none" />
+                    
+                    <!-- Reactions Overlay -->
+                    <div id="reaction-heart-pop-${momentId}" class="heart-pop text-6xl drop-shadow-lg">❤️</div>
+                    
+                    <!-- Reaction Pills -->
+                    <div class="absolute bottom-2 left-2 flex gap-1.5 flex-wrap pointer-events-none">
+                        ${renderReactionPills(m.reactions)}
+                    </div>
                 </div>
             ` : ''}
 
             <!-- Card Body / Actions -->
-            <div class="p-3.5 text-left">
+            <div class="p-3.5 text-left relative">
+                <!-- Emoji Picker Menu (Hidden by default) -->
+                <div id="emoji-picker-${momentId}" class="hidden absolute -top-12 left-4 bg-white dark:bg-zinc-800 rounded-full shadow-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 flex gap-3 z-50 emoji-picker-menu">
+                    <button onclick="addReaction('${momentId}', '❤️')" class="hover:scale-125 transition-transform text-lg">❤️</button>
+                    <button onclick="addReaction('${momentId}', '🔥')" class="hover:scale-125 transition-transform text-lg">🔥</button>
+                    <button onclick="addReaction('${momentId}', '😂')" class="hover:scale-125 transition-transform text-lg">😂</button>
+                    <button onclick="addReaction('${momentId}', '🍻')" class="hover:scale-125 transition-transform text-lg">🍻</button>
+                </div>
+
                 <div class="flex items-center gap-4 mb-2.5">
                     <button onclick="toggleLikeMoment('${momentId}')" class="flex items-center gap-1.5 text-zinc-500 hover:text-red-500 transition-colors active:scale-90">
                         <i data-lucide="heart" class="w-5 h-5 ${liked ? 'fill-red-500 text-red-500' : 'text-zinc-650'}" style="${liked ? 'fill: #ef4444; color: #ef4444;' : ''}"></i>
@@ -1617,7 +2250,7 @@ function renderMoments() {
         feed.appendChild(card);
     });
 
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 }
 
 
@@ -1631,45 +2264,287 @@ function renderPay() {
         list.innerHTML = `
             <div class="glass-card p-10 text-center w-full col-span-2 flex flex-col items-center gap-3 text-zinc-400">
                 <i data-lucide="scan-line" class="w-10 h-10 opacity-40"></i>
-                <p class="text-sm">No other squad members in this group yet.</p>
+                <p class="text-sm">${t('tab_pay_empty')}</p>
             </div>
         `;
-        lucide.createIcons();
+        if (typeof lucide !== 'undefined') { lucide.createIcons(); }
         return;
     }
 
     const netDebts = calculateNetDebts();
 
+    // Separate: people I owe vs people who owe me
+    const iOwe = [];
+    const theyOweMe = [];
+
     otherFriends.forEach(u => {
-        const debtToFriend = netDebts.find(d => d.from.toLowerCase() === CURRENT_USER.toLowerCase() && d.to.toLowerCase() === u.name.toLowerCase());
-        const debtFromFriend = netDebts.find(d => d.from.toLowerCase() === u.name.toLowerCase() && d.to.toLowerCase() === CURRENT_USER.toLowerCase());
-        let amountText = "Settled up";
-        let amountClass = "text-zinc-400 dark:text-zinc-500 font-semibold";
+        const debtToFriend = netDebts.find(d =>
+            d.from.toLowerCase() === CURRENT_USER.toLowerCase() &&
+            d.to.toLowerCase() === u.name.toLowerCase());
+        const debtFromFriend = netDebts.find(d =>
+            d.from.toLowerCase() === u.name.toLowerCase() &&
+            d.to.toLowerCase() === CURRENT_USER.toLowerCase());
 
-        if (debtToFriend) {
-            amountText = `You owe: ₹${debtToFriend.amount.toFixed(2)}`;
-            amountClass = "text-red-600 dark:text-red-400 font-bold";
-        } else if (debtFromFriend) {
-            amountText = `Owes you: ₹${debtFromFriend.amount.toFixed(2)}`;
-            amountClass = "text-emerald-600 dark:text-emerald-400 font-bold";
-        }
-
-        const buttonText = debtToFriend ? `Pay ₹${debtToFriend.amount.toFixed(2)}` : "Pay";
-        list.innerHTML += `
-            <div class="glass-card p-4 flex flex-col items-center text-center cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-900/30 transition-colors active:scale-95" onclick="openQRModal('${u.name}')">
-                <img src="${u.avatar}" class="w-12 h-12 rounded-full border border-zinc-200 dark:border-zinc-800 shadow-sm mb-2 object-cover bg-zinc-100" />
-                <h4 class="font-bold text-zinc-800 dark:text-zinc-200 text-sm mb-1">${u.name}</h4>
-                <p class="text-[10px] ${amountClass} mb-3">${amountText}</p>
-                <button class="pay-btn w-full text-xs font-semibold py-2 rounded-lg transition-colors active:scale-95">${buttonText}</button>
-            </div>
-        `;
+        if (debtToFriend) iOwe.push({ user: u, amount: debtToFriend.amount });
+        else if (debtFromFriend) theyOweMe.push({ user: u, amount: debtFromFriend.amount });
+        // settled: not shown
     });
+
+    let html = '';
+
+    // ─── Section 1: People I owe → Pay button ───
+    if (iOwe.length > 0) {
+        html += `<div class="col-span-2 mb-2 mt-1">
+            <p class="text-[10px] font-black text-red-500 uppercase tracking-widest flex items-center gap-1">
+                <i data-lucide="arrow-up-right" class="w-3 h-3"></i> ${t('tab_pay_you_owe')}
+            </p></div>`;
+        iOwe.forEach(({ user: u, amount }) => {
+            html += `
+            <div class="glass-card p-4 flex flex-col items-center text-center cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-900/30 transition-all active:scale-95" onclick="openQRModal('${u.name}')">
+                <img src="${u.avatar || getDefaultAvatar(u.name)}" class="w-12 h-12 rounded-full border-2 border-red-200 shadow-sm mb-2 object-cover bg-zinc-100" />
+                <h4 class="font-bold text-zinc-800 dark:text-zinc-200 text-sm mb-1">${u.name}</h4>
+                <p class="text-[10px] text-red-600 dark:text-red-400 font-bold mb-3">${t('lbl_you_owe')} ₹${amount.toFixed(2)}</p>
+                <button class="pay-btn w-full text-xs font-semibold py-2 rounded-lg transition-colors active:scale-95">${t('btn_pay')} ₹${amount.toFixed(2)}</button>
+            </div>`;
+        });
+    }
+
+    // ─── Section 2: People who owe me → Nudge + Clear Due ───
+    if (theyOweMe.length > 0) {
+        html += `<div class="col-span-2 mb-2 ${iOwe.length > 0 ? 'mt-5' : 'mt-1'}">
+            <p class="text-[10px] font-black text-emerald-600 uppercase tracking-widest flex items-center gap-1">
+                <i data-lucide="arrow-down-left" class="w-3 h-3"></i> ${t('tab_pay_owed_to_you')}
+            </p></div>`;
+        theyOweMe.forEach(({ user: u, amount }) => {
+            html += `
+            <div class="glass-card p-4 flex flex-col items-center text-center border border-emerald-100 dark:border-emerald-900/30">
+                <img src="${u.avatar || getDefaultAvatar(u.name)}" class="w-12 h-12 rounded-full border-2 border-emerald-200 shadow-sm mb-2 object-cover bg-zinc-100" />
+                <h4 class="font-bold text-zinc-800 dark:text-zinc-200 text-sm mb-1">${u.name}</h4>
+                <p class="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold mb-3">${t('lbl_owes_you')} ₹${amount.toFixed(2)}</p>
+                <div class="flex gap-1.5 w-full">
+                    <button onclick="nudgePerson('${u.name}', ${amount})" class="flex-1 flex items-center justify-center gap-1 bg-amber-50 hover:bg-amber-100 dark:bg-amber-900/20 dark:hover:bg-amber-900/40 text-amber-600 dark:text-amber-400 text-[10px] font-bold py-2 rounded-lg transition-colors active:scale-95">
+                        <i data-lucide="bell" class="w-3 h-3"></i> ${t('btn_nudge')}
+                    </button>
+                    <button onclick="clearDue('${u.name}', ${amount})" class="flex-1 flex items-center justify-center gap-1 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 text-[10px] font-bold py-2 rounded-lg transition-colors active:scale-95">
+                        <i data-lucide="check-circle" class="w-3 h-3"></i> ${t('btn_clear_due')}
+                    </button>
+                </div>
+            </div>`;
+        });
+    }
+
+    // ─── All settled ───
+    if (iOwe.length === 0 && theyOweMe.length === 0) {
+        html = `
+            <div class="glass-card p-10 text-center w-full col-span-2 flex flex-col items-center gap-3">
+                <div class="w-16 h-16 rounded-full bg-emerald-50 dark:bg-emerald-900/20 flex items-center justify-center">
+                    <i data-lucide="check-circle" class="w-8 h-8 text-emerald-500"></i>
+                </div>
+                <p class="font-bold text-zinc-700 dark:text-zinc-200">All Settled Up!</p>
+            </div>`;
+    }
+
+    list.innerHTML = html;
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 }
 
-// --- SQUAD MEMBERS & JOIN REQUEST RENDERING ---
+function nudgePerson(name, amount) {
+    const friend = users.find(u => u.name === name);
+    const uid = friend ? (friend.uid || '') : '';
+    openChatbox(name, uid);
 
-function renderSquadMembers() {
-    const container = document.getElementById('dash-squad-members');
+    if (amount !== undefined) {
+        const chatInput = document.getElementById('chatbox-input');
+        if (chatInput) {
+            chatInput.value = `Hey ${name}, gentle reminder for the pending amount of ₹${parseFloat(amount).toFixed(2)}. Please settle it up!`;
+            // Optional delay to ensure modal is open before focusing
+            setTimeout(() => chatInput.focus(), 100);
+        }
+    }
+}
+
+function clearDue(debtorName, amount) {
+    const amt = parseFloat(amount).toFixed(2);
+    if (!confirm(`Are you sure you want to clear ₹${amt} owed by ${debtorName}?\n\nThis marks their debt as settled and will delete their settled expenses from the database to save space. This cannot be undone.`)) return;
+
+    if (usingFirebase) {
+        const groupRef = db.collection("groups").doc(CURRENT_GROUP);
+
+        // 1. Get all expenses to adjust or delete them
+        groupRef.collection("expenses").get().then(snap => {
+            const batch = db.batch();
+            snap.forEach(doc => {
+                const exp = doc.data();
+                const paidByLC = (exp.paidBy || '').toLowerCase();
+                const debtorLC = debtorName.toLowerCase();
+                const currentLC = CURRENT_USER.toLowerCase();
+
+                const isUserPaidDebtor = paidByLC === currentLC && (exp.splitWith || []).some(n => n.toLowerCase() === debtorLC);
+                const isDebtorPaidUser = paidByLC === debtorLC && (exp.splitWith || []).some(n => n.toLowerCase() === currentLC);
+
+                if (isUserPaidDebtor) {
+                    const cleanSplitWith = (exp.splitWith || []).filter(n => n.toLowerCase() !== debtorLC);
+                    if (cleanSplitWith.length === 0 || (cleanSplitWith.length === 1 && cleanSplitWith[0].toLowerCase() === currentLC)) {
+                        batch.delete(doc.ref);
+                    } else {
+                        const share = exp.amount / exp.splitWith.length;
+                        batch.update(doc.ref, {
+                            splitWith: cleanSplitWith,
+                            amount: Math.max(0, exp.amount - share)
+                        });
+                    }
+                } else if (isDebtorPaidUser) {
+                    const cleanSplitWith = (exp.splitWith || []).filter(n => n.toLowerCase() !== currentLC);
+                    if (cleanSplitWith.length === 0 || (cleanSplitWith.length === 1 && cleanSplitWith[0].toLowerCase() === debtorLC)) {
+                        batch.delete(doc.ref);
+                    } else {
+                        const share = exp.amount / exp.splitWith.length;
+                        batch.update(doc.ref, {
+                            splitWith: cleanSplitWith,
+                            amount: Math.max(0, exp.amount - share)
+                        });
+                    }
+                }
+            });
+
+            // 2. Also delete any settlements between these two users to avoid leftover records
+            return groupRef.collection("settlements").get().then(settleSnap => {
+                settleSnap.forEach(sDoc => {
+                    const s = sDoc.data();
+                    const fromLC = (s.from || '').toLowerCase();
+                    const toLC = (s.to || '').toLowerCase();
+                    const debtorLC = debtorName.toLowerCase();
+                    const currentLC = CURRENT_USER.toLowerCase();
+                    if ((fromLC === debtorLC && toLC === currentLC) || (fromLC === currentLC && toLC === debtorLC)) {
+                        batch.delete(sDoc.ref);
+                    }
+                });
+                return batch.commit();
+            });
+        }).then(() => {
+            showPayToast(`✅ Cleared dues from ${debtorName} & cleaned up settled data!`);
+        }).catch(err => alert("Failed to clear due: " + err.message));
+    } else {
+        // Offline local db
+        const dbObj = getLocalDB();
+        const groupData = dbObj.groups[CURRENT_GROUP];
+        if (groupData) {
+            const currentLC = CURRENT_USER.toLowerCase();
+            const debtorLC = debtorName.toLowerCase();
+
+            groupData.expenses = (groupData.expenses || []).map(exp => {
+                const paidByLC = (exp.paidBy || '').toLowerCase();
+                const isUserPaidDebtor = paidByLC === currentLC && (exp.splitWith || []).some(n => n.toLowerCase() === debtorLC);
+                const isDebtorPaidUser = paidByLC === debtorLC && (exp.splitWith || []).some(n => n.toLowerCase() === currentLC);
+
+                if (isUserPaidDebtor) {
+                    const cleanSplitWith = (exp.splitWith || []).filter(n => n.toLowerCase() !== debtorLC);
+                    if (cleanSplitWith.length === 0 || (cleanSplitWith.length === 1 && cleanSplitWith[0].toLowerCase() === currentLC)) {
+                        return null;
+                    } else {
+                        const share = exp.amount / exp.splitWith.length;
+                        exp.splitWith = cleanSplitWith;
+                        exp.amount = Math.max(0, exp.amount - share);
+                        return exp;
+                    }
+                } else if (isDebtorPaidUser) {
+                    const cleanSplitWith = (exp.splitWith || []).filter(n => n.toLowerCase() !== currentLC);
+                    if (cleanSplitWith.length === 0 || (cleanSplitWith.length === 1 && cleanSplitWith[0].toLowerCase() === debtorLC)) {
+                        return null;
+                    } else {
+                        const share = exp.amount / exp.splitWith.length;
+                        exp.splitWith = cleanSplitWith;
+                        exp.amount = Math.max(0, exp.amount - share);
+                        return exp;
+                    }
+                }
+                return exp;
+            }).filter(Boolean);
+
+            // Delete settlements between them
+            groupData.settlements = (groupData.settlements || []).filter(s => {
+                const fromLC = (s.from || '').toLowerCase();
+                const toLC = (s.to || '').toLowerCase();
+                return !((fromLC === debtorLC && toLC === currentLC) || (fromLC === currentLC && toLC === debtorLC));
+            });
+
+            saveLocalDB(dbObj);
+        }
+        renderPay();
+        renderDashboard();
+        showPayToast(`✅ Cleared dues from ${debtorName}!`);
+    }
+}
+
+function showPayToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'fixed bottom-28 left-1/2 -translate-x-1/2 bg-zinc-900 text-white text-xs font-semibold px-4 py-2.5 rounded-2xl shadow-xl z-[200] flex items-center gap-2';
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+
+// --- GROUP MEMBERS & JOIN REQUEST RENDERING ---
+
+let activeRemoveMemberName = null;
+
+document.addEventListener('click', () => {
+    if (activeRemoveMemberName) {
+        activeRemoveMemberName = null;
+        renderGroupMembers();
+    }
+});
+
+function handleGroupMemberClick(event, name, uid) {
+    event.stopPropagation();
+    if (activeRemoveMemberName === name) {
+        activeRemoveMemberName = null;
+    } else {
+        activeRemoveMemberName = name;
+    }
+    renderGroupMembers();
+}
+
+function updateChatLastSeen(user) {
+    if (!CURRENT_GROUP || !CURRENT_USER || !user) return;
+    const key = `gaytm_chat_last_seen_${CURRENT_GROUP}_${CURRENT_USER}`;
+    let lastSeen = {};
+    try { lastSeen = JSON.parse(localStorage.getItem(key)) || {}; } catch (e) { }
+    const now = Date.now();
+    lastSeen[user] = now;
+    localStorage.setItem(key, JSON.stringify(lastSeen));
+
+    // Sync to Firestore so the OTHER user can detect blue ticks on their sent messages
+    if (usingFirebase && typeof db !== 'undefined' && CURRENT_GROUP) {
+        try {
+            const authUser = firebase.auth().currentUser;
+            const memberId = authUser ? authUser.uid : CURRENT_USER;
+            const updateData = {};
+            updateData[`chatLastRead.${user}`] = now;
+            db.collection('groups').doc(CURRENT_GROUP).collection('members').doc(memberId)
+                .update(updateData)
+                .catch(() => {}); // silent fail — non-critical
+        } catch (e) {}
+    }
+}
+
+function getChatLastSeen(user) {
+    if (!CURRENT_GROUP || !CURRENT_USER || !user) return 0;
+    const key = `gaytm_chat_last_seen_${CURRENT_GROUP}_${CURRENT_USER}`;
+    try {
+        const lastSeen = JSON.parse(localStorage.getItem(key)) || {};
+        return lastSeen[user] || 0;
+    } catch (e) { return 0; }
+}
+
+function hasUnreadMessages(user) {
+    const lastSeen = getChatLastSeen(user);
+    if (!groupChats) return false;
+    return groupChats.some(m => m.from === user && m.to === CURRENT_USER && m.timestamp > lastSeen);
+}
+
+function renderGroupMembers() {
+    const container = document.getElementById('dash-group-members');
     if (!container) return;
     container.innerHTML = '';
 
@@ -1679,15 +2554,53 @@ function renderSquadMembers() {
     }
 
     users.forEach(u => {
-        const isMe = u.name === CURRENT_USER;
+        const isMe = (u.name || '').trim() === (CURRENT_USER || '').trim();
+
+        let clickAction = '';
+        if (!isMe) {
+            clickAction = `onclick="openChatbox('${(u.name || '').replace(/'/g, "\\'")}', '${u.uid || ''}')"`;
+        }
+
+        const cursorStyle = isMe ? '' : 'cursor-pointer';
+        const hoverTitle = isMe ? '' : `title="Chat with ${u.name}"`;
+
+        const hasUnread = !isMe && hasUnreadMessages(u.name);
+        const unreadDot = hasUnread ? `<span class="absolute top-0 right-0 w-3.5 h-3.5 bg-red-500 rounded-full border-2 border-white dark:border-zinc-900 z-10 animate-pulse shadow-sm shadow-red-500/50"></span>` : '';
+
         container.innerHTML += `
-            <div class="flex flex-col items-center gap-1 w-14">
-                <img src="${u.avatar}" class="w-10 h-10 rounded-full border-2 ${isMe ? 'border-indigo-400' : 'border-zinc-200'} shadow-sm object-cover bg-zinc-100" />
+            <div class="flex flex-col items-center gap-1 w-14 relative group ${cursorStyle}" ${clickAction} ${hoverTitle}>
+                <div class="relative">
+                    <img src="${u.avatar || getDefaultAvatar(u.name)}" class="w-10 h-10 rounded-full border-2 ${isMe ? 'border-indigo-400' : 'border-zinc-200'} shadow-sm object-cover bg-zinc-100" />
+                    ${unreadDot}
+                </div>
                 <span class="text-[10px] font-semibold ${isMe ? 'text-indigo-600' : 'text-zinc-600'} truncate w-full text-center">${isMe ? 'You' : u.name}</span>
             </div>
         `;
     });
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
+    updateHomeNotificationDot();
+}
+
+function removeMember(name, uid) {
+    if (!confirm(`Are you sure you want to remove ${name} from this group?`)) return;
+
+    if (usingFirebase) {
+        const memberId = uid || name;
+        db.collection("groups").doc(CURRENT_GROUP).collection("members").doc(memberId).delete()
+            .then(() => {
+                alert(`${name} has been removed from the group.`);
+            })
+            .catch(err => alert("Error removing member: " + err.message));
+    } else {
+        const dbObj = getLocalDB();
+        const groupData = dbObj.groups[CURRENT_GROUP];
+        if (groupData) {
+            groupData.members = groupData.members.filter(m => m.name !== name);
+            saveLocalDB(dbObj);
+            syncLocalGroupData();
+            alert(`${name} has been removed from the group.`);
+        }
+    }
 }
 
 function getGroupAdmin() {
@@ -1700,46 +2613,75 @@ function getGroupAdmin() {
     return null;
 }
 
+function updateHomeNotificationDot() {
+    const dot = document.getElementById('home-notification-dot');
+    if (!dot) return;
+
+    let showDot = false;
+
+    // Check for join requests
+    const admin = getGroupAdmin();
+    const isAdmin = admin && admin.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase();
+    if (isAdmin && joinRequests && joinRequests.length > 0) {
+        showDot = true;
+    }
+
+    // Check for unread chats
+    if (!showDot && typeof users !== 'undefined') {
+        const hasUnread = users.some(u => u.name !== CURRENT_USER && hasUnreadMessages(u.name));
+        if (hasUnread) showDot = true;
+    }
+
+    if (showDot) {
+        dot.classList.remove('hidden');
+    } else {
+        dot.classList.add('hidden');
+    }
+}
+
 function renderJoinRequests() {
     const section = document.getElementById('dash-join-requests');
     const list = document.getElementById('join-requests-list');
     if (!section || !list) return;
 
     const admin = getGroupAdmin();
-    const isAdmin = admin && admin === CURRENT_USER;
+    const isAdmin = admin && admin.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase();
 
     if (!isAdmin || joinRequests.length === 0) {
         section.classList.add('hidden');
+        updateHomeNotificationDot();
         return;
     }
 
     section.classList.remove('hidden');
+    const homeDot = document.getElementById('home-notification-dot');
+    if (homeDot) homeDot.classList.remove('hidden');
     list.innerHTML = '';
 
     joinRequests.forEach(req => {
         list.innerHTML += `
             <div class="glass-card p-4 flex items-center justify-between">
                 <div class="flex items-center gap-3">
-                    <img src="${req.avatar}" class="w-10 h-10 rounded-full border border-zinc-200 shadow-sm" />
+                    <img src="${req.avatar || getDefaultAvatar(req.name)}" class="w-10 h-10 rounded-full border border-zinc-200 shadow-sm" />
                     <div>
                         <p class="font-semibold text-zinc-800 text-sm">${req.name}</p>
-                        <p class="text-[10px] text-zinc-400">Wants to join</p>
+                        <p class="text-[10px] text-zinc-400">${t('req_wants_join')}</p>
                     </div>
                 </div>
                 <div class="flex gap-2">
                     <button onclick="approveJoinRequest('${req.name}')"
                         class="bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-emerald-100 transition-colors active:scale-95">
-                        <i data-lucide="check" class="w-3.5 h-3.5 inline"></i> Accept
+                        <i data-lucide="check" class="w-3.5 h-3.5 inline"></i> ${t('btn_approve')}
                     </button>
                     <button onclick="rejectJoinRequest('${req.name}')"
                         class="bg-red-50 text-red-600 px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-red-100 transition-colors active:scale-95">
-                        <i data-lucide="x" class="w-3.5 h-3.5 inline"></i>
+                        <i data-lucide="x" class="w-3.5 h-3.5 inline"></i> ${t('btn_reject')}
                     </button>
                 </div>
             </div>
         `;
     });
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 }
 
 function approveJoinRequest(name) {
@@ -1748,9 +2690,13 @@ function approveJoinRequest(name) {
 
     const newMember = {
         name: req.name,
-        upi: `${req.name.toLowerCase()}@okaxis`,
+        upi: req.upi || '',
+        upiPhone: req.upiPhone || '',
         avatar: req.avatar
     };
+    if (req.qrImage) {
+        newMember.qrImage = req.qrImage;
+    }
 
     if (usingFirebase) {
         const groupRef = db.collection("groups").doc(CURRENT_GROUP);
@@ -1758,17 +2704,30 @@ function approveJoinRequest(name) {
 
         if (req.uid) newMember.uid = req.uid;
 
-        groupRef.collection("members").doc(memberId).set(newMember).then(() => {
-            return groupRef.collection("joinRequests").doc(memberId).delete();
-        }).then(() => {
-            // Firebase listeners will auto-update UI
+        groupRef.get().then(gDoc => {
+            const memberLimit = gDoc.data().memberLimit || 0;
+            return groupRef.collection("members").get().then(membersSnap => {
+                if (memberLimit > 0 && membersSnap.size >= memberLimit) {
+                    alert("Cannot approve join request. This group has reached its maximum member limit of " + memberLimit + "!");
+                    throw new Error("Limit reached");
+                }
+                return groupRef.collection("members").doc(memberId).set(newMember)
+                    .then(() => groupRef.collection("joinRequests").doc(memberId).delete());
+            });
         }).catch(err => {
-            alert("Error approving request: " + err.message);
+            if (err.message !== "Limit reached") {
+                alert("Error approving request: " + err.message);
+            }
         });
     } else {
         const dbObj = getLocalDB();
         const groupData = dbObj.groups[CURRENT_GROUP];
         if (groupData) {
+            const memberLimit = groupData.memberLimit || 0;
+            if (memberLimit > 0 && groupData.members.length >= memberLimit) {
+                alert("Cannot approve join request. This group has reached its maximum member limit of " + memberLimit + "!");
+                return;
+            }
             groupData.members.push(newMember);
             groupData.joinRequests = groupData.joinRequests.filter(r => r.name !== name);
             saveLocalDB(dbObj);
@@ -1836,6 +2795,7 @@ function renderMyGroups() {
     const tabList = document.getElementById('groups-tab-active-list');
 
     const groups = getUserGroupsList();
+    const pendingGroups = getPendingGroups();
 
     // Also ensure the current group is in the list
     if (CURRENT_GROUP && !groups.some(g => g.code === CURRENT_GROUP)) {
@@ -1845,7 +2805,7 @@ function renderMyGroups() {
 
     let htmlContent = '';
 
-    if (groups.length === 0) {
+    if (groups.length === 0 && pendingGroups.length === 0) {
         htmlContent = `
             <div class="text-center py-6 text-zinc-400">
                 <i data-lucide="folder-open" class="w-10 h-10 mx-auto mb-2 opacity-40"></i>
@@ -1853,17 +2813,19 @@ function renderMyGroups() {
             </div>
         `;
     } else {
+        // Active/Joined groups
         groups.forEach(g => {
             const isActive = g.code === CURRENT_GROUP;
             htmlContent += `
-                <div class="glass-card p-4 flex items-center justify-between ${isActive ? 'border-indigo-300 bg-indigo-50/50' : ''}">
-                    <div class="flex items-center gap-3">
+                <div class="glass-card p-4 flex items-center justify-between gap-2 ${isActive ? 'border-indigo-300 bg-indigo-50/50' : ''}">
+                    <div class="flex items-center gap-3 min-w-0 flex-1">
                         <div class="w-10 h-10 ${isActive ? 'bg-indigo-100 text-indigo-600' : 'bg-zinc-100 text-zinc-500'} rounded-lg flex items-center justify-center shrink-0">
                             <i data-lucide="${isActive ? 'check-circle' : 'users'}" class="w-5 h-5"></i>
                         </div>
-                        <div class="min-w-0">
+                        <div class="min-w-0 flex-1">
                             <p class="font-semibold text-zinc-800 dark:text-zinc-200 text-sm truncate">${g.name}</p>
                             <p class="text-[10px] text-zinc-400 dark:text-zinc-500 uppercase font-bold tracking-wider">CODE: ${g.code}${isActive ? ' • Active' : ''}</p>
+                            <p class="text-[10px] text-zinc-500 dark:text-zinc-400 mt-0.5 font-semibold">Created by: ${g.createdBy || 'Unknown'}${g.createdByEmail ? ` (${g.createdByEmail})` : ''}</p>
                         </div>
                     </div>
                     <div class="flex gap-2 shrink-0">
@@ -1875,12 +2837,33 @@ function renderMyGroups() {
                 </div>
             `;
         });
+
+        // Pending groups
+        pendingGroups.forEach(g => {
+            htmlContent += `
+                <div class="glass-card p-4 flex items-center justify-between gap-2 border-orange-200 bg-orange-50/30">
+                    <div class="flex items-center gap-3 min-w-0 flex-1">
+                        <div class="w-10 h-10 bg-orange-100 text-orange-600 rounded-lg flex items-center justify-center shrink-0">
+                            <i data-lucide="clock" class="w-5 h-5"></i>
+                        </div>
+                        <div class="min-w-0 flex-1">
+                            <p class="font-semibold text-zinc-800 dark:text-zinc-200 text-sm truncate">${g.name}</p>
+                            <p class="text-[10px] text-orange-600 dark:text-orange-500 uppercase font-bold tracking-wider">CODE: ${g.code} • Pending Approval</p>
+                            <p class="text-[10px] text-zinc-500 dark:text-zinc-400 mt-0.5 font-semibold">Created by: ${g.createdBy || 'Unknown'}${g.createdByEmail ? ` (${g.createdByEmail})` : ''}</p>
+                        </div>
+                    </div>
+                    <div class="flex gap-2 shrink-0">
+                        <button onclick="cancelPendingRequest('${g.code}')" class="bg-red-50 text-red-600 px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-red-100 transition-colors active:scale-95">Cancel</button>
+                    </div>
+                </div>
+            `;
+        });
     }
 
     if (list) list.innerHTML = htmlContent;
     if (tabList) tabList.innerHTML = htmlContent;
 
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 }
 
 function leaveAndRemoveGroup(code) {
@@ -1935,6 +2918,11 @@ function closeModal(id) {
     const modal = document.getElementById(id);
     const content = document.getElementById(`${id}-content`);
 
+    if (content) {
+        // Clear any inline transform from drag/swipe immediately so the CSS animation class can take over
+        content.style.transform = '';
+    }
+
     if (content.classList.contains('translate-y-full') === false && id !== 'qr-modal' && id !== 'otp-modal') {
         content.classList.add('translate-y-full');
     }
@@ -1945,6 +2933,10 @@ function closeModal(id) {
 
     setTimeout(() => {
         modal.classList.add('hidden');
+        // Clear any inline styles left over from swipe gestures
+        content.style.transform = '';
+        content.style.transition = '';
+
         // Reset Forms
         if (id === 'expense-modal') {
             document.getElementById('expense-desc').value = '';
@@ -1953,8 +2945,10 @@ function closeModal(id) {
             selectedSplitUsers = [CURRENT_USER];
             renderSplitUsers();
 
-            const expImgInput = document.getElementById('expense-image-input');
-            if (expImgInput) expImgInput.value = '';
+            const expImgCameraInput = document.getElementById('expense-camera-input');
+            const expImgGalleryInput = document.getElementById('expense-gallery-input');
+            if (expImgCameraInput) expImgCameraInput.value = '';
+            if (expImgGalleryInput) expImgGalleryInput.value = '';
             const expImgPreview = document.getElementById('expense-image-preview');
             if (expImgPreview) {
                 expImgPreview.src = '';
@@ -1962,12 +2956,19 @@ function closeModal(id) {
             }
             const expImgPlaceholder = document.getElementById('expense-image-placeholder');
             if (expImgPlaceholder) expImgPlaceholder.classList.remove('hidden');
+            const removeExpBtn = document.getElementById('remove-expense-image-btn');
+            if (removeExpBtn) removeExpBtn.classList.add('hidden');
             expenseImageBase64 = null;
         } else if (id === 'moment-modal') {
             document.getElementById('moment-caption').value = '';
-            document.getElementById('moment-image').value = '';
+            const mCam = document.getElementById('moment-camera-input');
+            const mGal = document.getElementById('moment-gallery-input');
+            if (mCam) mCam.value = '';
+            if (mGal) mGal.value = '';
             document.getElementById('image-preview').classList.add('hidden');
             document.getElementById('image-placeholder').classList.remove('hidden');
+            const removeMomBtn = document.getElementById('remove-moment-image-btn');
+            if (removeMomBtn) removeMomBtn.classList.add('hidden');
             momentImageBase64 = null;
         } else if (id === 'profile-qr-modal') {
             // Reset the QR upload preview but do NOT clear qrImageBase64 here
@@ -1982,6 +2983,10 @@ function closeModal(id) {
             const uploadInput = document.getElementById('avatar-upload-input');
             if (uploadInput) uploadInput.value = '';
             uploadedAvatarBase64 = null;
+        } else if (id === 'chatbox-modal') {
+            isChatboxOpen = false;
+            activeChatUser = null;
+            activeChatUid = null;
         }
     }, 300);
 }
@@ -2007,7 +3012,7 @@ function renderSplitUsers() {
             </button>
         `;
     });
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 }
 
 function toggleUserSplit(name) {
@@ -2020,6 +3025,19 @@ function toggleUserSplit(name) {
 }
 
 function addExpense() {
+    // Guard: kicked/removed user cannot add expenses
+    if (!CURRENT_GROUP || !CURRENT_USER) {
+        alert('You are not in an active group. You cannot add expenses.');
+        closeModal('expense-modal');
+        return;
+    }
+    const isMember = users.some(u => u.name.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase());
+    if (!isMember) {
+        alert('You are no longer a member of this group and cannot add expenses.');
+        closeModal('expense-modal');
+        return;
+    }
+
     const desc = document.getElementById('expense-desc').value.trim();
     const amt = parseFloat(document.getElementById('expense-amount').value);
     const comment = document.getElementById('expense-comment').value.trim();
@@ -2074,22 +3092,136 @@ function addExpense() {
     }
 }
 
-function previewMomentImage(event) {
-    const file = event.target.files[0];
-    if (file) {
+// Helper to check and convert HEIC files to JPG using heic2any
+function processHEIC(file) {
+    return new Promise((resolve) => {
+        if (!file) {
+            resolve(null);
+            return;
+        }
+        const fileName = file.name ? file.name.toLowerCase() : '';
+        const fileType = file.type ? file.type.toLowerCase() : '';
+        if (fileName.endsWith('.heic') || fileType === 'image/heic' || fileType === 'image/heif') {
+            if (typeof heic2any === 'function') {
+                heic2any({
+                    blob: file,
+                    toType: "image/jpeg",
+                    quality: 0.8
+                })
+                    .then(conversionResult => {
+                        const blob = Array.isArray(conversionResult) ? conversionResult[0] : conversionResult;
+                        const newName = file.name.replace(/\.heic$/i, ".jpg").replace(/\.heif$/i, ".jpg");
+                        const convertedFile = new File([blob], newName, { type: "image/jpeg" });
+                        resolve(convertedFile);
+                    })
+                    .catch(err => {
+                        console.error("HEIC conversion failed, using original file:", err);
+                        resolve(file);
+                    });
+            } else {
+                console.warn("heic2any library not loaded, using original file");
+                resolve(file);
+            }
+        } else {
+            resolve(file);
+        }
+    });
+}
+
+// --- IMAGE COMPRESSION UTILITY ---
+// Compresses an image File to a base64 JPEG under maxSizeKB using Canvas.
+// Returns a Promise<string> (base64 data URL).
+function compressImage(file, maxSizeKB = 800, initialQuality = 0.85) {
+    return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = function (e) {
-            momentImageBase64 = e.target.result;
-            const preview = document.getElementById('image-preview');
-            preview.src = momentImageBase64;
-            preview.classList.remove('hidden');
-            document.getElementById('image-placeholder').classList.add('hidden');
-        }
+            const img = new Image();
+            img.onload = function () {
+                const canvas = document.createElement('canvas');
+                // Scale down large images to max 1920px on longest side
+                let { width, height } = img;
+                const MAX_DIM = 1920;
+                if (width > MAX_DIM || height > MAX_DIM) {
+                    if (width > height) {
+                        height = Math.round(height * MAX_DIM / width);
+                        width = MAX_DIM;
+                    } else {
+                        width = Math.round(width * MAX_DIM / height);
+                        height = MAX_DIM;
+                    }
+                }
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+
+                // Iteratively reduce quality until under maxSizeKB
+                let quality = initialQuality;
+                let result = canvas.toDataURL('image/jpeg', quality);
+                while (result.length * 0.75 > maxSizeKB * 1024 && quality > 0.2) {
+                    quality -= 0.08;
+                    result = canvas.toDataURL('image/jpeg', quality);
+                }
+                resolve(result);
+            };
+            img.onerror = reject;
+            img.src = e.target.result;
+        };
+        reader.onerror = reject;
         reader.readAsDataURL(file);
+    });
+}
+
+function previewMomentImage(event) {
+    const rawFile = event.target.files[0];
+    if (rawFile) {
+        processHEIC(rawFile).then(file => {
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                openCropper(e.target.result, function (croppedBase64) {
+                    compressBase64Image(croppedBase64).then(compressed => {
+                        momentImageBase64 = compressed;
+                        const preview = document.getElementById('image-preview');
+                        preview.src = momentImageBase64;
+                        preview.classList.remove('hidden');
+                        document.getElementById('image-placeholder').classList.add('hidden');
+                        const removeBtn = document.getElementById('remove-moment-image-btn');
+                        if (removeBtn) { removeBtn.classList.remove('hidden'); removeBtn.classList.add('flex'); }
+                    });
+                });
+            }
+            reader.readAsDataURL(file);
+        });
     }
 }
 
+function removeMomentImage() {
+    momentImageBase64 = null;
+    const preview = document.getElementById('image-preview');
+    if (preview) { preview.src = ''; preview.classList.add('hidden'); }
+    document.getElementById('image-placeholder').classList.remove('hidden');
+    const removeBtn = document.getElementById('remove-moment-image-btn');
+    if (removeBtn) { removeBtn.classList.add('hidden'); removeBtn.classList.remove('flex'); }
+    const mCam = document.getElementById('moment-camera-input');
+    const mGal = document.getElementById('moment-gallery-input');
+    if (mCam) mCam.value = '';
+    if (mGal) mGal.value = '';
+}
+
 function addMoment() {
+    // Guard: kicked/removed user cannot post moments
+    if (!CURRENT_GROUP || !CURRENT_USER) {
+        alert('You are not in an active group. You cannot post moments.');
+        closeModal('moment-modal');
+        return;
+    }
+    const isMemberForMoment = users.some(u => u.name.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase());
+    if (!isMemberForMoment) {
+        alert('You are no longer a member of this group and cannot post moments.');
+        closeModal('moment-modal');
+        return;
+    }
+
     const caption = document.getElementById('moment-caption').value.trim();
     if (!caption && !momentImageBase64) {
         alert('Write a caption or select an image to post!');
@@ -2173,19 +3305,24 @@ function deleteMoment(momentId) {
 }
 
 function previewQRUploadImage(event) {
-    const file = event.target.files[0];
-    if (file) {
-        const reader = new FileReader();
-        reader.onload = function (e) {
-            qrImageBase64 = e.target.result;
-            const preview = document.getElementById('qr-preview-img');
-            preview.src = qrImageBase64;
-            preview.classList.remove('hidden');
-            document.getElementById('qr-upload-placeholder').classList.add('hidden');
-            const removeBtn = document.getElementById('remove-qr-btn');
-            if (removeBtn) removeBtn.classList.remove('hidden');
-        };
-        reader.readAsDataURL(file);
+    const rawFile = event.target.files[0];
+    if (rawFile) {
+        processHEIC(rawFile).then(file => {
+            // QR codes are small so compress lightly — 400KB max, high quality to keep QR scannable
+            compressImage(file, 400, 0.92).then(compressed => {
+                qrImageBase64 = compressed;
+                const preview = document.getElementById('qr-preview-img');
+                preview.src = qrImageBase64;
+                preview.classList.remove('hidden');
+                document.getElementById('qr-upload-placeholder').classList.add('hidden');
+                const removeBtn = document.getElementById('remove-qr-btn');
+                if (removeBtn) removeBtn.classList.remove('hidden');
+            }).catch(() => {
+                const reader = new FileReader();
+                reader.onload = e => { qrImageBase64 = e.target.result; };
+                reader.readAsDataURL(file);
+            });
+        });
     }
 }
 
@@ -2195,7 +3332,7 @@ function clearQRUpload() {
     const placeholder = document.getElementById('qr-upload-placeholder');
     const uploadInput = document.getElementById('qr-upload-input');
     const removeBtn = document.getElementById('remove-qr-btn');
-    
+
     if (preview) {
         preview.src = '';
         preview.classList.add('hidden');
@@ -2208,86 +3345,128 @@ function clearQRUpload() {
 function openProfileQRModal() {
     closeProfileDrawer();
     const currentUserObj = users.find(u => usingFirebase ? (u.uid === (firebase.auth().currentUser ? firebase.auth().currentUser.uid : '')) : (u.name === CURRENT_USER));
-    
+
     const upiInput = document.getElementById('edit-upi-id');
+    const upiPhoneInput = document.getElementById('edit-upi-phone');
     const previewImg = document.getElementById('qr-preview-img');
     const placeholder = document.getElementById('qr-upload-placeholder');
     const uploadInput = document.getElementById('qr-upload-input');
     const removeBtn = document.getElementById('remove-qr-btn');
-    
+
     if (uploadInput) uploadInput.value = '';
-    
-    if (currentUserObj) {
-        upiInput.value = currentUserObj.upi || '';
-        if (currentUserObj.qrImage) {
-            qrImageBase64 = currentUserObj.qrImage;
-            previewImg.src = qrImageBase64;
-            previewImg.classList.remove('hidden');
-            placeholder.classList.add('hidden');
-            if (removeBtn) removeBtn.classList.remove('hidden');
-        } else {
-            qrImageBase64 = null;
-            previewImg.src = '';
-            previewImg.classList.add('hidden');
-            placeholder.classList.remove('hidden');
-            if (removeBtn) removeBtn.classList.add('hidden');
+
+    // Determine source
+    const isGroupSpecific = localStorage.getItem('gaytm_group_specific_qr') === 'true';
+    let upiValue = '';
+    let upiPhoneValue = '';
+    let qrValue = null;
+
+    if (isGroupSpecific) {
+        if (currentUserObj) {
+            upiValue = currentUserObj.upi || '';
+            upiPhoneValue = currentUserObj.upiPhone || '';
+            qrValue = currentUserObj.qrImage || null;
         }
     } else {
-        upiInput.value = '';
+        upiValue = getUserItem('global_upi') || (currentUserObj ? currentUserObj.upi : '') || '';
+        upiPhoneValue = getUserItem('global_upi_phone') || (currentUserObj ? currentUserObj.upiPhone : '') || '';
+        qrValue = getUserItem('global_qr') || (currentUserObj ? currentUserObj.qrImage : null) || null;
+    }
+
+    if (upiInput) upiInput.value = upiValue;
+    if (upiPhoneInput) upiPhoneInput.value = upiPhoneValue;
+
+    if (qrValue) {
+        qrImageBase64 = qrValue;
+        previewImg.src = qrImageBase64;
+        previewImg.classList.remove('hidden');
+        placeholder.classList.add('hidden');
+        if (removeBtn) removeBtn.classList.remove('hidden');
+    } else {
         qrImageBase64 = null;
         previewImg.src = '';
         previewImg.classList.add('hidden');
         placeholder.classList.remove('hidden');
         if (removeBtn) removeBtn.classList.add('hidden');
     }
-    
+
     openModal('profile-qr-modal');
 }
 
 function saveProfilePaymentDetails() {
     const upiInput = document.getElementById('edit-upi-id');
-    const upiValue = upiInput.value.trim();
-    if (!upiValue) {
-        alert("Please enter a UPI ID!");
+    const upiValue = upiInput ? upiInput.value.trim() : '';
+    const upiPhoneInput = document.getElementById('edit-upi-phone');
+    const upiPhoneValue = upiPhoneInput ? upiPhoneInput.value.trim() : '';
+
+    if (!upiValue && !upiPhoneValue) {
+        alert("Please enter either a UPI ID or a UPI Phone Number!");
         return;
     }
-    
+
+    const isGroupSpecific = localStorage.getItem('gaytm_group_specific_qr') === 'true';
+    if (!isGroupSpecific) {
+        setUserItem('global_upi', upiValue);
+        setUserItem('global_upi_phone', upiPhoneValue);
+        if (qrImageBase64) {
+            setUserItem('global_qr', qrImageBase64);
+        } else {
+            removeUserItem('global_qr');
+        }
+    }
+
+    const displayValue = upiValue || upiPhoneValue || 'Add your UPI';
+
     if (usingFirebase) {
         const currentUser = firebase.auth().currentUser;
         if (!currentUser) return;
         const memberId = currentUser.uid;
-        
-        const updateData = { upi: upiValue };
+
+        const updateData = { upi: upiValue, upiPhone: upiPhoneValue };
         if (qrImageBase64) {
             updateData.qrImage = qrImageBase64;
         } else {
             updateData.qrImage = firebase.firestore.FieldValue.delete();
         }
-        
-        db.collection("groups").doc(CURRENT_GROUP).collection("members").doc(memberId).update(updateData).then(() => {
-            document.getElementById('profile-upi').innerText = upiValue;
+
+        db.collection("users").doc(memberId).set({
+            upi: upiValue,
+            upiPhone: upiPhoneValue,
+            qrImage: qrImageBase64 || ''
+        }, { merge: true }).catch(err => console.warn("Error saving global profile:", err));
+
+        if (CURRENT_GROUP) {
+            db.collection("groups").doc(CURRENT_GROUP).collection("members").doc(memberId).update(updateData).then(() => {
+                document.getElementById('profile-upi').innerText = displayValue;
+                closeModal('profile-qr-modal');
+            }).catch(err => {
+                alert("Error saving details: " + err.message);
+            });
+        } else {
+            document.getElementById('profile-upi').innerText = displayValue;
             closeModal('profile-qr-modal');
-        }).catch(err => {
-            alert("Error saving details: " + err.message);
-        });
+        }
     } else {
         // Offline Local Simulator Mode
-        const dbObj = getLocalDB();
-        const groupData = dbObj.groups[CURRENT_GROUP];
-        if (groupData) {
-            const member = groupData.members.find(m => m.name === CURRENT_USER);
-            if (member) {
-                member.upi = upiValue;
-                if (qrImageBase64) {
-                    member.qrImage = qrImageBase64;
-                } else {
-                    delete member.qrImage;
+        if (CURRENT_GROUP) {
+            const dbObj = getLocalDB();
+            const groupData = dbObj.groups[CURRENT_GROUP];
+            if (groupData) {
+                const member = groupData.members.find(m => m.name === CURRENT_USER);
+                if (member) {
+                    member.upi = upiValue;
+                    member.upiPhone = upiPhoneValue;
+                    if (qrImageBase64) {
+                        member.qrImage = qrImageBase64;
+                    } else {
+                        delete member.qrImage;
+                    }
+                    saveLocalDB(dbObj);
+                    syncLocalGroupData();
                 }
-                saveLocalDB(dbObj);
-                syncLocalGroupData();
             }
         }
-        document.getElementById('profile-upi').innerText = upiValue;
+        document.getElementById('profile-upi').innerText = displayValue;
         closeModal('profile-qr-modal');
     }
 }
@@ -2296,23 +3475,85 @@ function openQRModal(name) {
     const user = users.find(u => u.name === name);
     if (user) {
         document.getElementById('qr-name').innerText = user.name;
-        document.getElementById('qr-upi').innerText = user.upi;
-        document.getElementById('qr-avatar').src = user.avatar;
-        
+        document.getElementById('qr-upi').innerText = user.upi || 'Not set';
+
+        const qrUpiPhoneEl = document.getElementById('qr-upi-phone');
+        if (qrUpiPhoneEl) {
+            qrUpiPhoneEl.innerText = user.upiPhone || 'Not set';
+        }
+
+        document.getElementById('qr-avatar').src = user.avatar || getDefaultAvatar(user.name);
+
         const qrImageEl = document.getElementById('qr-modal-image');
+        const upiId = user.upi || (user.upiPhone ? `${user.upiPhone}@upi` : '');
         if (user.qrImage) {
             qrImageEl.src = user.qrImage;
-        } else {
-            const upiUrl = `upi://pay?pa=${encodeURIComponent(user.upi)}&pn=${encodeURIComponent(user.name)}&cu=INR`;
+            qrImageEl.classList.remove('hidden');
+        } else if (upiId) {
+            const upiUrl = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(user.name)}&cu=INR`;
             qrImageEl.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(upiUrl)}`;
+            qrImageEl.classList.remove('hidden');
+        } else {
+            qrImageEl.src = '';
+            qrImageEl.classList.add('hidden');
         }
-        
+
         openModal('qr-modal');
+    }
+}
+
+function copyQR() {
+    const qrImageEl = document.getElementById('qr-modal-image');
+    if (!qrImageEl || !qrImageEl.src || qrImageEl.classList.contains('hidden')) {
+        alert("No QR code to copy!");
+        return;
+    }
+    const qrUrl = qrImageEl.src;
+    if (qrUrl.startsWith('data:image')) {
+        fetch(qrUrl)
+            .then(res => res.blob())
+            .then(blob => {
+                navigator.clipboard.write([
+                    new ClipboardItem({ [blob.type]: blob })
+                ]).then(() => {
+                    alert("QR Code Image copied to clipboard!");
+                }).catch(err => {
+                    navigator.clipboard.writeText(qrUrl).then(() => {
+                        alert("QR Code Data URL copied!");
+                    });
+                });
+            }).catch(err => {
+                alert("Failed to copy QR: " + err.message);
+            });
+    } else {
+        fetch(qrUrl)
+            .then(res => res.blob())
+            .then(blob => {
+                navigator.clipboard.write([
+                    new ClipboardItem({ 'image/png': blob })
+                ]).then(() => {
+                    alert("QR Code Image copied to clipboard!");
+                }).catch(err => {
+                    navigator.clipboard.writeText(qrUrl).then(() => {
+                        alert("QR Code Link copied!");
+                    });
+                });
+            }).catch(err => {
+                navigator.clipboard.writeText(qrUrl).then(() => {
+                    alert("QR Code Link copied!");
+                }).catch(e => {
+                    alert("Failed to copy QR Code Link.");
+                });
+            });
     }
 }
 
 function copyUPI() {
     const upiText = document.getElementById('qr-upi').innerText;
+    if (!upiText || upiText === 'Not set') {
+        alert("No UPI ID set to copy!");
+        return;
+    }
     try {
         const tempInput = document.createElement("input");
         tempInput.value = upiText;
@@ -2323,6 +3564,27 @@ function copyUPI() {
         alert("UPI ID Copied!");
     } catch (err) {
         alert("Failed to copy. UPI: " + upiText);
+    }
+}
+
+function copyUPIPhone() {
+    const phoneEl = document.getElementById('qr-upi-phone');
+    if (!phoneEl) return;
+    const phoneText = phoneEl.innerText;
+    if (!phoneText || phoneText === 'Not set') {
+        alert("No UPI Phone Number set to copy!");
+        return;
+    }
+    try {
+        const tempInput = document.createElement("input");
+        tempInput.value = phoneText;
+        document.body.appendChild(tempInput);
+        tempInput.select();
+        document.execCommand("copy");
+        document.body.removeChild(tempInput);
+        alert("UPI Phone Number Copied!");
+    } catch (err) {
+        alert("Failed to copy: " + phoneText);
     }
 }
 
@@ -2358,71 +3620,154 @@ if (usingFirebase) {
     loader.classList.remove('hidden');
     loader.classList.remove('opacity-0');
 
-    firebase.auth().onAuthStateChanged((user) => {
-        const loaderEl = document.getElementById('loader-view');
-        if (user) {
-            // Check if this was a manual sign-in click (isSigningIn) and has not been verified via OTP yet
-            if (isSigningIn && !otpVerified) {
-                const displayName = user.displayName || user.email.split('@')[0];
-                sendEmailOTP(displayName, user.email, 'login', { name: displayName, email: user.email });
-                
-                // Hide loading screen, keep user on login page with OTP modal open
+    let authResolved = false;
+
+    // Fallback timer: if Firebase silently fails/hangs (e.g. adblocker), force fallback after 8 seconds
+    const authFallbackTimer = setTimeout(() => {
+        if (!authResolved) {
+            console.warn("Firebase Auth timed out. Running in offline fallback mode.");
+            firebaseFallbackMode = true;
+            usingFirebase = false;
+            loader.classList.add('opacity-0');
+            setTimeout(() => loader.classList.add('hidden'), 400);
+
+            // Restore user namespace so getUserItem reads the correct user-scoped keys
+            const storedEmail = localStorage.getItem('gaytm_user_email');
+            if (storedEmail) {
+                const userNs = storedEmail.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+                localStorage.setItem('gaytm_active_user_ns', userNs);
+            }
+
+            // Fallback to offline mode UI
+            const storedUser = localStorage.getItem('gaytm_user');
+            if (storedUser) {
+                CURRENT_USER = storedUser;
+
+                // Restore group from user-scoped storage so they aren't lost
+                const storedGroup = getUserItem('group');
+                if (storedGroup) {
+                    CURRENT_GROUP = storedGroup;
+                    CURRENT_GROUP_NAME = getUserItem('group_name') || storedGroup;
+                }
+
+                document.getElementById('login-view').classList.add('hidden');
+                document.getElementById('main-app').classList.remove('hidden');
+                initApp();
+            } else {
+                document.getElementById('login-view').classList.remove('hidden');
+                document.getElementById('main-app').classList.add('hidden');
+            }
+        }
+    }, 8000);
+
+    try {
+        firebase.auth().onAuthStateChanged((user) => {
+            authResolved = true;
+            clearTimeout(authFallbackTimer);
+
+            // If Firebase Auth resolved after the fallback timer already fired,
+            // re-enable Firebase mode so the app uses Firestore data correctly.
+            if (firebaseFallbackMode && user) {
+                firebaseFallbackMode = false;
+                usingFirebase = true;
+                if (!db) {
+                    try { db = firebase.firestore(); } catch(e) { console.error('Firestore re-init failed:', e); }
+                }
+            }
+
+            const loaderEl = document.getElementById('loader-view');
+            try {
+                if (user) {
+                    // Firebase verified the password — that's sufficient. Skip OTP for returning users.
+
+                    const emailStr = user.email || 'user@example.com';
+                    CURRENT_USER = user.displayName || emailStr.split('@')[0];
+                    localStorage.setItem('gaytm_user', CURRENT_USER);
+                    localStorage.setItem('gaytm_user_email', emailStr);
+                    const userNs = emailStr.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+                    localStorage.setItem('gaytm_active_user_ns', userNs);
+
+                    document.getElementById('login-view').classList.add('hidden');
+                    document.getElementById('main-app').classList.remove('hidden');
+
+                    const storedGroup = getUserItem('group');
+                    if (storedGroup) {
+                        CURRENT_GROUP = storedGroup;
+                        CURRENT_GROUP_NAME = getUserItem('group_name') || storedGroup;
+                    }
+                    discoverUserGroupsFirebase();
+                    initApp();
+                } else {
+                    CURRENT_USER = '';
+                    CURRENT_GROUP = '';
+                    CURRENT_GROUP_NAME = '';
+                    localStorage.removeItem('gaytm_user');
+                    localStorage.removeItem('gaytm_group');
+                    localStorage.removeItem('gaytm_group_name');
+
+                    // Clean dynamic UI lists
+                    users = [];
+                    expenses = [];
+                    moments = [];
+
+                    if (unsubscribeMembers) unsubscribeMembers();
+                    if (unsubscribeExpenses) unsubscribeExpenses();
+                    if (unsubscribeMoments) unsubscribeMoments();
+
+                    // Force-hide the profile drawer (it lives outside main-app)
+                    const _d = document.getElementById('profile-drawer');
+                    const _dc = document.getElementById('profile-drawer-content');
+                    if (_d) _d.classList.add('hidden');
+                    if (_dc) _dc.classList.add('-translate-x-full');
+
+                    document.getElementById('main-app').classList.add('hidden');
+                    document.getElementById('login-view').classList.remove('hidden');
+                }
+
+                // Hide loader after loading has finished
                 loaderEl.classList.add('opacity-0');
                 setTimeout(() => loaderEl.classList.add('hidden'), 400);
-                return;
+            } catch (innerErr) {
+                console.error("Error inside onAuthStateChanged:", innerErr);
+                loaderEl.classList.add('opacity-0');
+                setTimeout(() => loaderEl.classList.add('hidden'), 400);
+                alert("App initialization error: " + innerErr.message + "\nStack: " + innerErr.stack);
+
+                // Fallback UI to prevent blank screen
+                document.getElementById('login-view').classList.remove('hidden');
+                document.getElementById('main-app').classList.add('hidden');
             }
+        });
+    } catch (err) {
+        authResolved = true;
+        clearTimeout(authFallbackTimer);
+        console.error("Firebase Auth failed to initialize (possibly blocked by browser):", err);
+        usingFirebase = false;
+        loader.classList.add('opacity-0');
+        setTimeout(() => loader.classList.add('hidden'), 400);
 
-            CURRENT_USER = user.displayName || user.email.split('@')[0];
-            localStorage.setItem('gaytm_user', CURRENT_USER);
-            localStorage.setItem('gaytm_user_email', user.email);
-            const userNs = user.email.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-            localStorage.setItem('gaytm_active_user_ns', userNs);
-            
-            document.getElementById('login-view').classList.add('hidden');
-            document.getElementById('main-app').classList.remove('hidden');
-            
-            const storedGroup = getUserItem('group');
-            if (storedGroup) {
-                CURRENT_GROUP = storedGroup;
-                CURRENT_GROUP_NAME = getUserItem('group_name') || storedGroup;
-            }
-            discoverUserGroupsFirebase();
-            initApp();
-        } else {
-            CURRENT_USER = '';
-            CURRENT_GROUP = '';
-            CURRENT_GROUP_NAME = '';
-            localStorage.removeItem('gaytm_user');
-            removeUserItem('group');
-            removeUserItem('group_name');
-            
-            // Clean dynamic UI lists
-            users = [];
-            expenses = [];
-            moments = [];
-
-            if (unsubscribeMembers) unsubscribeMembers();
-            if (unsubscribeExpenses) unsubscribeExpenses();
-            if (unsubscribeMoments) unsubscribeMoments();
-
-            document.getElementById('main-app').classList.add('hidden');
-            document.getElementById('login-view').classList.remove('hidden');
-        }
-        
-        // Hide loader after loading has finished
-        loaderEl.classList.add('opacity-0');
-        setTimeout(() => loaderEl.classList.add('hidden'), 400);
-    });
+        // Fallback to offline mode UI
+        document.getElementById('login-view').classList.remove('hidden');
+        document.getElementById('main-app').classList.add('hidden');
+        alert("Firebase Auth was blocked by your browser (e.g., Brave Shields or AdBlocker). Running in offline mode.");
+    }
 } else {
     // Offline Local Mode startup check
     const storedUser = localStorage.getItem('gaytm_user');
     const storedGroup = getUserItem('group');
 
+    // Explicitly hide the loader just in case it was shown by default
+    const loaderEl = document.getElementById('loader-view');
+    if (loaderEl) {
+        loaderEl.classList.add('opacity-0');
+        setTimeout(() => loaderEl.classList.add('hidden'), 400);
+    }
+
     if (storedUser) {
         CURRENT_USER = storedUser;
         document.getElementById('login-view').classList.add('hidden');
         document.getElementById('main-app').classList.remove('hidden');
-        
+
         if (storedGroup) {
             CURRENT_GROUP = storedGroup;
             CURRENT_GROUP_NAME = getUserItem('group_name') || storedGroup;
@@ -2478,7 +3823,7 @@ function changeDisplayName() {
                 localStorage.setItem('gaytm_local_users', JSON.stringify(localUsers));
             }
         }
-        
+
         if (CURRENT_GROUP) {
             const dbObj = getLocalDB();
             const group = dbObj.groups[CURRENT_GROUP];
@@ -2500,6 +3845,8 @@ function changeDisplayName() {
 }
 
 function toggleDarkTheme(isDark) {
+    const isAmoled = localStorage.getItem('gaytm_amoled_ui') === 'true';
+
     if (isDark) {
         document.documentElement.classList.add('dark');
         localStorage.setItem('gaytm_theme', 'dark');
@@ -2514,6 +3861,11 @@ function toggleDarkTheme(isDark) {
             icon.setAttribute('data-lucide', 'sun');
         }
     } else {
+        // Enforce AMOLED exclusivity: if dark mode is turned off, amoled must be turned off too
+        if (isAmoled) {
+            toggleAmoledUI(false);
+        }
+
         document.documentElement.classList.remove('dark');
         localStorage.setItem('gaytm_theme', 'light');
         const toggle = document.getElementById('theme-toggle-checkbox');
@@ -2528,16 +3880,40 @@ function toggleDarkTheme(isDark) {
         }
     }
     renderExpensePieChart();
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 }
 
 // Initialize theme on script run
-(function() {
+(function () {
     const savedTheme = localStorage.getItem('gaytm_theme');
     const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     const isDark = savedTheme === 'dark' || (!savedTheme && systemPrefersDark);
     toggleDarkTheme(isDark);
 })();
+
+function toggleAmoledUI(isAmoled) {
+    if (isAmoled) {
+        document.documentElement.classList.add('amoled-mode');
+        localStorage.setItem('gaytm_amoled_ui', 'true');
+        const toggle = document.getElementById('amoled-ui-toggle');
+        if (toggle) toggle.checked = true;
+        // Automatically enforce dark theme if AMOLED is chosen
+        toggleDarkTheme(true);
+    } else {
+        document.documentElement.classList.remove('amoled-mode');
+        localStorage.setItem('gaytm_amoled_ui', 'false');
+        const toggle = document.getElementById('amoled-ui-toggle');
+        if (toggle) toggle.checked = false;
+    }
+}
+
+// Initialize AMOLED on script run
+(function () {
+    const isAmoled = localStorage.getItem('gaytm_amoled_ui') === 'true';
+    toggleAmoledUI(isAmoled);
+})();
+
+
 
 
 // --- ADDED PREMIUM FEATURES AND CONTROLS ---
@@ -2574,7 +3950,7 @@ function populateHeaderGroupSelect() {
         };
         menu.appendChild(item);
     });
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 }
 
 function toggleCustomDropdown(e) {
@@ -2606,7 +3982,42 @@ function closeCustomDropdown() {
 // Add global window listener to close custom dropdown when clicking outside
 window.addEventListener('click', () => {
     closeCustomDropdown();
+    if (typeof closeChartDropdown === 'function') closeChartDropdown();
 });
+
+function toggleChartDropdown(e) {
+    if (e) e.stopPropagation();
+    const menu = document.getElementById('chart-mode-dropdown-menu');
+    if (!menu) return;
+
+    if (menu.classList.contains('hidden')) {
+        menu.classList.remove('hidden');
+        setTimeout(() => {
+            menu.classList.remove('scale-95', 'opacity-0');
+            menu.classList.add('scale-100', 'opacity-100');
+        }, 10);
+    } else {
+        closeChartDropdown();
+    }
+}
+
+function closeChartDropdown() {
+    const menu = document.getElementById('chart-mode-dropdown-menu');
+    if (!menu) return;
+    menu.classList.remove('scale-100', 'opacity-100');
+    menu.classList.add('scale-95', 'opacity-0');
+    setTimeout(() => {
+        menu.classList.add('hidden');
+    }, 200);
+}
+
+function selectChartMode(mode, name) {
+    document.getElementById('chart-mode-dropdown-selected-name').textContent = name;
+    closeChartDropdown();
+    setChartMode(mode);
+}
+
+
 function handleGroupSelectChange(code) {
     if (!code) return;
     const groups = getUserGroupsList();
@@ -2629,13 +4040,20 @@ function discoverUserGroupsFirebase() {
                 const groupCode = groupDocRef.id;
                 groupDocRef.get().then((gDoc) => {
                     if (gDoc.exists) {
-                        const groupName = gDoc.data().name || groupCode;
-                        addToUserGroupsList(groupCode, groupName);
+                        const gData = gDoc.data();
+                        const groupName = gData.name || groupCode;
+                        const createdByEmail = gData.createdByEmail || '';
+                        const createdBy = gData.createdBy || '';
+                        addToUserGroupsList(groupCode, groupName, createdByEmail, createdBy);
 
                         // Clear pending state if approved
+                        removePendingGroup(groupCode);
                         if (getUserItem('pending_request_group') === groupCode) {
                             removeUserItem('pending_request_group');
+                            const banner = document.getElementById('pending-request-banner');
+                            if (banner) banner.remove();
                         }
+                        renderMyGroups();
 
                         // If user has no active group, auto-select it
                         if (!CURRENT_GROUP) {
@@ -2658,14 +4076,34 @@ function discoverUserGroupsFirebase() {
 
     // Discover pending join requests
     db.collectionGroup('joinRequests').where('uid', '==', currentUser.uid).onSnapshot((snapshot) => {
+        const activePending = [];
+        let pendingPromises = [];
+
         snapshot.forEach((doc) => {
             const groupDocRef = doc.ref.parent.parent;
             if (groupDocRef) {
                 const groupCode = groupDocRef.id;
-                if (!CURRENT_GROUP && !getUserItem('pending_request_group')) {
-                    setUserItem('pending_request_group', groupCode);
-                    initApp();
-                }
+                const p = groupDocRef.get().then(gDoc => {
+                    if (gDoc.exists) {
+                        const gData = gDoc.data();
+                        const groupName = gData.name || groupCode;
+                        const createdByEmail = gData.createdByEmail || '';
+                        const createdBy = gData.createdBy || '';
+                        activePending.push({ code: groupCode, name: groupName, createdByEmail, createdBy });
+                    }
+                });
+                pendingPromises.push(p);
+            }
+        });
+
+        Promise.all(pendingPromises).then(() => {
+            // Sync pending requests locally
+            setUserItem('pending_groups', JSON.stringify(activePending));
+            renderMyGroups();
+
+            // Clear active pending tracker if none left
+            if (activePending.length === 0) {
+                removeUserItem('pending_request_group');
             }
         });
     }, (error) => {
@@ -2696,24 +4134,42 @@ function calculateNetDebts() {
     });
 
     expenses.forEach(exp => {
+        // Identify the payer — they must be a current active member to create debts
         const payerObj = users.find(u => u.name.toLowerCase() === exp.paidBy.toLowerCase());
-        if (!payerObj) return;
+        if (!payerObj) return; // Payer was kicked — skip this expense in debt calculations
         const payer = payerObj.name;
 
-        const splitWith = (exp.splitWith || []).map(member => {
-            const memberObj = users.find(u => u.name.toLowerCase() === member.toLowerCase());
-            return memberObj ? memberObj.name : null;
-        }).filter(Boolean);
+        // Use the ORIGINAL splitWith list length as the denominator so that kicking a member
+        // does NOT retroactively change what the remaining members owe.
+        // The original denominator is always exp.splitWith.length (the full list at time of creation).
+        const originalSplitCount = (exp.splitWith || []).length;
+        if (originalSplitCount === 0) return;
 
-        if (splitWith.length === 0) return;
+        const splitAmount = exp.amount / originalSplitCount;
 
-        const splitAmount = exp.amount / splitWith.length;
+        // Only create debt entries between currently active members.
+        // If a split member was kicked, their debt to the payer is simply forgotten
+        // (the payer already knows they lent money; the kicked user's balance is wiped).
+        const activeSplitMembers = (exp.splitWith || []).filter(memberName => {
+            return users.some(u => u.name.toLowerCase() === memberName.toLowerCase());
+        }).map(memberName => {
+            return users.find(u => u.name.toLowerCase() === memberName.toLowerCase()).name;
+        });
 
-        splitWith.forEach(member => {
+        activeSplitMembers.forEach(member => {
             if (member !== payer) {
                 debts[member][payer] += splitAmount;
             }
         });
+    });
+
+    // Apply settlements — each settlement reduces the debtor's raw debt
+    settlements.forEach(s => {
+        const fromName = users.find(u => u.name.toLowerCase() === (s.from || '').toLowerCase())?.name;
+        const toName = users.find(u => u.name.toLowerCase() === (s.to || '').toLowerCase())?.name;
+        if (fromName && toName && fromName !== toName && debts[fromName]?.[toName] !== undefined) {
+            debts[fromName][toName] = Math.max(0, debts[fromName][toName] - s.amount);
+        }
     });
 
     const netDebts = [];
@@ -2752,6 +4208,60 @@ function renderExpensePieChart() {
     }
 
     chartCard.classList.remove('hidden');
+
+    // Auto-fallback if the current chart mode has no data
+    let hasWhoOwesMeData = false;
+    const netDebts = calculateNetDebts();
+    const debtsToMe = netDebts.filter(d => d.to === CURRENT_USER);
+    if (debtsToMe.length > 0) {
+        hasWhoOwesMeData = true;
+    }
+
+    let hasCategoryData = false;
+    expenses.forEach(exp => {
+        if (exp.splitWith && exp.splitWith.includes(CURRENT_USER)) {
+            hasCategoryData = true;
+        }
+    });
+
+    let totalPaid = 0;
+    let totalOwed = 0;
+    expenses.forEach(exp => {
+        if (exp.paidBy === CURRENT_USER) {
+            totalPaid += exp.amount;
+        }
+        if (exp.splitWith && exp.splitWith.includes(CURRENT_USER)) {
+            totalOwed += exp.amount / exp.splitWith.length;
+        }
+    });
+    const hasPaidVsOwedData = (totalPaid > 0 || totalOwed > 0);
+
+    let currentModeHasData = false;
+    if (chartMode === 'who-owes-me') currentModeHasData = hasWhoOwesMeData;
+    else if (chartMode === 'category') currentModeHasData = hasCategoryData;
+    else if (chartMode === 'paid-vs-owed') currentModeHasData = hasPaidVsOwedData;
+
+    if (!currentModeHasData) {
+        let targetMode = null;
+        let targetName = '';
+        if (hasWhoOwesMeData) {
+            targetMode = 'who-owes-me';
+            targetName = 'Who owes me how much';
+        } else if (hasPaidVsOwedData) {
+            targetMode = 'paid-vs-owed';
+            targetName = 'Paid vs Owed Share';
+        } else if (hasCategoryData) {
+            targetMode = 'category';
+            targetName = 'My Spend Categories';
+        }
+
+        if (targetMode && targetMode !== chartMode) {
+            chartMode = targetMode;
+            const btnText = document.getElementById('chart-mode-dropdown-selected-name');
+            if (btnText) btnText.textContent = targetName;
+        }
+    }
+
     if (detailsContainer) {
         detailsContainer.innerHTML = '';
         detailsContainer.classList.remove('hidden');
@@ -2869,43 +4379,45 @@ function renderExpensePieChart() {
         '#a1a1aa'  // Gray
     ];
 
-    expenseChart = new Chart(canvas, {
-        type: 'pie',
-        data: {
-            labels: labels,
-            datasets: [{
-                data: data,
-                backgroundColor: colors.slice(0, labels.length),
-                borderWidth: 1,
-                borderColor: document.documentElement.classList.contains('dark') ? '#14151f' : '#ffffff'
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'bottom',
-                    labels: {
-                        color: document.documentElement.classList.contains('dark') ? '#f3f4f6' : '#27272a',
-                        font: {
-                            family: 'Inter, sans-serif',
-                            size: 10,
-                            weight: 'bold'
-                        },
-                        padding: 8
-                    }
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            return ` ₹${context.raw.toFixed(2)}`;
+    if (typeof Chart !== 'undefined') {
+        expenseChart = new Chart(canvas, {
+            type: 'pie',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: data,
+                    backgroundColor: colors.slice(0, labels.length),
+                    borderWidth: data.length > 1 ? 1 : 0,
+                    borderColor: document.documentElement.classList.contains('dark') ? '#14151f' : '#ffffff'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            color: document.documentElement.classList.contains('dark') ? '#f3f4f6' : '#27272a',
+                            font: {
+                                family: 'Inter, sans-serif',
+                                size: 10,
+                                weight: 'bold'
+                            },
+                            padding: 8
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function (context) {
+                                return ` ₹${context.raw.toFixed(2)}`;
+                            }
                         }
                     }
                 }
             }
-        }
-    });
+        });
+    }
 }
 
 function renderSettlementBreakdown() {
@@ -2996,7 +4508,7 @@ function renderEditSplitUsers() {
             </button>
         `;
     });
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') { lucide.createIcons(); }
 }
 
 function toggleEditSplitUser(name) {
@@ -3051,15 +4563,11 @@ function postExpenseComment(expenseId) {
 
     if (usingFirebase) {
         const expRef = db.collection("groups").doc(CURRENT_GROUP).collection("expenses").doc(expenseId);
-        expRef.get().then((doc) => {
-            if (!doc.exists) return;
-            const data = doc.data();
-            const comments = data.comments || [];
-            comments.push(newComment);
-            expRef.update({ comments }).then(() => {
-                input.value = '';
-            });
-        });
+        expRef.update({
+            comments: firebase.firestore.FieldValue.arrayUnion(newComment)
+        }).then(() => {
+            input.value = '';
+        }).catch(err => console.error("Error adding comment: ", err));
     } else {
         const dbObj = getLocalDB();
         const gd = dbObj.groups[CURRENT_GROUP];
@@ -3075,8 +4583,107 @@ function postExpenseComment(expenseId) {
         }
     }
 }
+// --- MOMENT REACTIONS FUN UI ---
+let momentLongPressTimer = null;
+
+function handleMomentDoubleTap(momentId) {
+    // Show heart pop animation
+    const heart = document.getElementById(`reaction-heart-pop-${momentId}`);
+    if (heart) {
+        heart.classList.remove('animate-heart-pop');
+        void heart.offsetWidth; // trigger reflow
+        heart.classList.add('animate-heart-pop');
+    }
+    // Add reaction
+    addReaction(momentId, '❤️');
+}
+
+function startMomentLongPress(momentId, e) {
+    if (e && e.type === 'mousedown' && e.button !== 0) return; // Only left click
+    momentLongPressTimer = setTimeout(() => {
+        const picker = document.getElementById(`emoji-picker-${momentId}`);
+        if (picker) {
+            picker.classList.remove('hidden');
+        }
+    }, 800); // 800ms for long press to prevent accidental trigger during scroll
+}
+
+function cancelMomentLongPress() {
+    if (momentLongPressTimer) {
+        clearTimeout(momentLongPressTimer);
+        momentLongPressTimer = null;
+    }
+}
+
+function addReaction(momentId, emoji) {
+    if (!CURRENT_GROUP || !CURRENT_USER) return;
+
+    // Hide picker if open
+    const picker = document.getElementById(`emoji-picker-${momentId}`);
+    if (picker) picker.classList.add('hidden');
+
+    if (emoji === '❤️') {
+        const heart = document.getElementById(`reaction-heart-pop-${momentId}`);
+        if (heart) {
+            heart.classList.remove('animate-heart-pop');
+            void heart.offsetWidth; // trigger reflow
+            heart.classList.add('animate-heart-pop');
+        }
+    }
+
+    if (usingFirebase) {
+        const momentRef = db.collection("groups").doc(CURRENT_GROUP).collection("moments").doc(momentId);
+        const updateData = {};
+        updateData[`reactions.${CURRENT_USER}`] = emoji;
+        momentRef.update(updateData).catch(err => {
+            console.error("Error adding reaction: ", err);
+        });
+    } else {
+        const dbObj = getLocalDB();
+        const groupData = dbObj.groups[CURRENT_GROUP];
+        if (groupData) {
+            const m = groupData.moments.find(x => x.id === momentId);
+            if (m) {
+                if (!m.reactions) m.reactions = {};
+                m.reactions[CURRENT_USER] = emoji;
+                saveLocalDB(dbObj);
+                syncLocalGroupData();
+            }
+        }
+    }
+}
+
+function renderReactionPills(reactionsObj) {
+    if (!reactionsObj) return '';
+    // Count occurrences of each emoji
+    const counts = {};
+    Object.values(reactionsObj).forEach(emoji => {
+        counts[emoji] = (counts[emoji] || 0) + 1;
+    });
+
+    return Object.entries(counts).map(([emoji, count]) => {
+        return `<div class="reaction-pill bg-white/90 dark:bg-zinc-800/90 backdrop-blur-sm border border-zinc-200/50 dark:border-zinc-700/50 rounded-full px-2 py-0.5 text-[10px] font-bold text-zinc-800 dark:text-zinc-200 shadow-sm flex items-center gap-1">
+            <span>${emoji}</span> <span>${count}</span>
+        </div>`;
+    }).join('');
+}
+
+// Global click to close emoji pickers
+window.addEventListener('click', (e) => {
+    if (!e.target.closest('.moment-card')) {
+        document.querySelectorAll('.emoji-picker-menu').forEach(menu => menu.classList.add('hidden'));
+    }
+});
 
 function toggleLikeMoment(momentId) {
+    // Guard: kicked/removed user cannot interact
+    if (!CURRENT_GROUP || !CURRENT_USER) return;
+    const isMember = users.some(u => u.name.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase());
+    if (!isMember) {
+        alert('You are no longer a member of this group and cannot like moments.');
+        return;
+    }
+
     if (usingFirebase) {
         const momentRef = db.collection("groups").doc(CURRENT_GROUP).collection("moments").doc(momentId);
         momentRef.get().then((doc) => {
@@ -3115,6 +4722,17 @@ function postFeedComment(momentId) {
     const text = input.value.trim();
     if (!text) return;
 
+    // Guard: kicked/removed user cannot post comments
+    if (!CURRENT_GROUP || !CURRENT_USER) {
+        alert('You are not in an active group. You cannot comment.');
+        return;
+    }
+    const isMember = users.some(u => u.name.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase());
+    if (!isMember) {
+        alert('You are no longer a member of this group and cannot post comments.');
+        return;
+    }
+
     const newComment = {
         user: CURRENT_USER,
         text: text,
@@ -3123,15 +4741,11 @@ function postFeedComment(momentId) {
 
     if (usingFirebase) {
         const momentRef = db.collection("groups").doc(CURRENT_GROUP).collection("moments").doc(momentId);
-        momentRef.get().then((doc) => {
-            if (!doc.exists) return;
-            const data = doc.data();
-            const comments = data.comments || [];
-            comments.push(newComment);
-            momentRef.update({ comments }).then(() => {
-                input.value = '';
-            });
-        });
+        momentRef.update({
+            comments: firebase.firestore.FieldValue.arrayUnion(newComment)
+        }).then(() => {
+            input.value = '';
+        }).catch(err => console.error("Error adding comment: ", err));
     } else {
         const dbObj = getLocalDB();
         const gd = dbObj.groups[CURRENT_GROUP];
@@ -3155,7 +4769,7 @@ function openProfileEditModal() {
     document.getElementById('edit-display-name-input').value = CURRENT_USER;
 
     const currentUserObj = users.find(u => usingFirebase ? (u.uid === (firebase.auth().currentUser ? firebase.auth().currentUser.uid : '')) : (u.name === CURRENT_USER));
-    const defaultAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${CURRENT_USER}&backgroundColor=c7d2fe`;
+    const defaultAvatar = getDefaultAvatar(CURRENT_USER);
 
     const previewImg = document.getElementById('avatar-preview-img');
     if (previewImg) {
@@ -3167,15 +4781,19 @@ function openProfileEditModal() {
 }
 
 function previewAvatarUploadImage(event) {
-    const file = event.target.files[0];
-    if (file) {
-        const reader = new FileReader();
-        reader.onload = function (e) {
-            uploadedAvatarBase64 = e.target.result;
-            const preview = document.getElementById('avatar-preview-img');
-            if (preview) preview.src = uploadedAvatarBase64;
-        }
-        reader.readAsDataURL(file);
+    const rawFile = event.target.files[0];
+    if (rawFile) {
+        processHEIC(rawFile).then(file => {
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                openCropper(e.target.result, function (croppedBase64) {
+                    uploadedAvatarBase64 = croppedBase64;
+                    const preview = document.getElementById('avatar-preview-img');
+                    if (preview) preview.src = uploadedAvatarBase64;
+                });
+            }
+            reader.readAsDataURL(file);
+        });
     }
 }
 
@@ -3187,12 +4805,20 @@ function saveProfileDetails() {
         return;
     }
 
-    const defaultAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${newName}&backgroundColor=c7d2fe`;
+    const defaultAvatar = getDefaultAvatar(newName);
     const avatarToSave = uploadedAvatarBase64 || defaultAvatar;
     const oldName = CURRENT_USER;
 
     if (usingFirebase && firebase.auth().currentUser) {
         const user = firebase.auth().currentUser;
+
+        // Optimistic UI Update (Instant)
+        CURRENT_USER = newName;
+        localStorage.setItem('gaytm_user', newName);
+        initApp();
+        closeModal('profile-edit-modal');
+
+        // Background Firebase Update
         user.updateProfile({
             displayName: newName
         }).then(() => {
@@ -3202,13 +4828,8 @@ function saveProfileDetails() {
                     avatar: avatarToSave
                 }).catch(e => console.log("Failed updating member in Firestore:", e));
             }
-            CURRENT_USER = newName;
-            localStorage.setItem('gaytm_user', newName);
-            initApp();
-            closeModal('profile-edit-modal');
-            alert('Profile updated successfully!');
         }).catch(err => {
-            alert('Failed to update profile: ' + err.message);
+            console.error('Failed to update profile: ' + err.message);
         });
     } else {
         // Offline Mode
@@ -3262,21 +4883,50 @@ function closeProfileDrawer() {
 }
 
 function previewExpenseImage(event) {
-    const file = event.target.files[0];
-    if (file) {
-        const reader = new FileReader();
-        reader.onload = function (e) {
-            expenseImageBase64 = e.target.result;
-            const preview = document.getElementById('expense-image-preview');
-            if (preview) {
-                preview.src = expenseImageBase64;
-                preview.classList.remove('hidden');
+    const rawFile = event.target.files[0];
+    if (rawFile) {
+        processHEIC(rawFile).then(file => {
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                openCropper(e.target.result, function (croppedBase64) {
+                    compressBase64Image(croppedBase64).then(compressed => {
+                        expenseImageBase64 = compressed;
+                        updateExpenseImagePreview();
+                    }).catch(() => {
+                        expenseImageBase64 = croppedBase64;
+                        updateExpenseImagePreview();
+                    });
+                });
             }
-            const placeholder = document.getElementById('expense-image-placeholder');
-            if (placeholder) placeholder.classList.add('hidden');
-        }
-        reader.readAsDataURL(file);
+            reader.readAsDataURL(file);
+        });
     }
+}
+
+function updateExpenseImagePreview() {
+    const preview = document.getElementById('expense-image-preview');
+    if (preview) {
+        preview.src = expenseImageBase64;
+        preview.classList.remove('hidden');
+    }
+    const placeholder = document.getElementById('expense-image-placeholder');
+    if (placeholder) placeholder.classList.add('hidden');
+    const removeBtn = document.getElementById('remove-expense-image-btn');
+    if (removeBtn) { removeBtn.classList.remove('hidden'); removeBtn.classList.add('flex'); }
+}
+
+function removeExpenseImage() {
+    expenseImageBase64 = null;
+    const preview = document.getElementById('expense-image-preview');
+    if (preview) { preview.src = ''; preview.classList.add('hidden'); }
+    const placeholder = document.getElementById('expense-image-placeholder');
+    if (placeholder) placeholder.classList.remove('hidden');
+    const removeBtn = document.getElementById('remove-expense-image-btn');
+    if (removeBtn) { removeBtn.classList.add('hidden'); removeBtn.classList.remove('flex'); }
+    const eCam = document.getElementById('expense-camera-input');
+    const eGal = document.getElementById('expense-gallery-input');
+    if (eCam) eCam.value = '';
+    if (eGal) eGal.value = '';
 }
 
 function deleteExpenseComment(expenseId, commentIdx) {
@@ -3305,6 +4955,28 @@ function deleteExpenseComment(expenseId, commentIdx) {
                     syncLocalGroupData();
                 }
             }
+        }
+    }
+}
+
+function deleteExpense(expenseId) {
+    if (!confirm("Are you sure you want to delete this bill? This will recalculate everyone's balances.")) return;
+
+    if (usingFirebase) {
+        db.collection("groups").doc(CURRENT_GROUP).collection("expenses").doc(expenseId).delete()
+            .then(() => {
+                // Success, Firestore listener will auto-update
+            })
+            .catch(err => {
+                alert("Failed to delete bill: " + err.message);
+            });
+    } else {
+        const dbObj = getLocalDB();
+        const gd = dbObj.groups[CURRENT_GROUP];
+        if (gd && gd.expenses) {
+            gd.expenses = gd.expenses.filter(x => x.id !== expenseId);
+            saveLocalDB(dbObj);
+            syncLocalGroupData();
         }
     }
 }
@@ -3353,16 +5025,46 @@ function renderGroupInfo() {
     document.getElementById('groups-active-name').innerText = CURRENT_GROUP_NAME;
     document.getElementById('groups-active-code').innerText = CURRENT_GROUP;
 
-    const defaultAvatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(CURRENT_GROUP_NAME)}&backgroundColor=c7d2fe`;
+    const defaultAvatar = getDefaultAvatar(CURRENT_GROUP_NAME);
     const avatarImg = document.getElementById('groups-avatar-img');
     const aboutText = document.getElementById('groups-about-text');
+    const creatorEl = document.getElementById('groups-active-creator');
+
+    const limitDiv = document.getElementById('groups-limit-div');
+    const limitDisplayDiv = document.getElementById('groups-limit-display-div');
+    const limitInput = document.getElementById('groups-limit-input');
+    const limitValue = document.getElementById('groups-limit-value');
+
+    const admin = getGroupAdmin();
+    const isLeader = admin && admin.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase();
 
     if (usingFirebase) {
         db.collection("groups").doc(CURRENT_GROUP).get().then((doc) => {
             if (doc.exists) {
                 const data = doc.data();
                 if (avatarImg) avatarImg.src = data.avatar || defaultAvatar;
-                if (aboutText) aboutText.innerText = data.about || "Welcome to our group! Share details, split bills, and enjoy.";
+                if (aboutText) aboutText.innerText = data.about || "";
+
+                // Show Group Creator Details
+                const creatorName = data.createdBy || 'Unknown';
+                const creatorEmail = data.createdByEmail || '';
+                if (creatorEl) {
+                    creatorEl.innerText = creatorEmail ? `Created by: ${creatorName} (${creatorEmail})` : `Created by: ${creatorName}`;
+                }
+                updateLocalUserGroupCreator(CURRENT_GROUP, creatorEmail, creatorName);
+
+                // Populate member limit
+                const limit = data.memberLimit || 0;
+                if (limitInput) limitInput.value = limit > 0 ? limit : '';
+                if (limitValue) limitValue.innerText = limit > 0 ? limit : 'Unlimited';
+
+                if (isLeader) {
+                    if (limitDiv) limitDiv.classList.remove('hidden');
+                    if (limitDisplayDiv) limitDisplayDiv.classList.add('hidden');
+                } else {
+                    if (limitDiv) limitDiv.classList.add('hidden');
+                    if (limitDisplayDiv) limitDisplayDiv.classList.remove('hidden');
+                }
             }
         }).catch(() => {
             if (avatarImg) avatarImg.src = defaultAvatar;
@@ -3372,7 +5074,27 @@ function renderGroupInfo() {
         const groupData = dbObj.groups[CURRENT_GROUP];
         if (groupData) {
             if (avatarImg) avatarImg.src = groupData.avatar || defaultAvatar;
-            if (aboutText) aboutText.innerText = groupData.about || "Welcome to our group! Share details, split bills, and enjoy.";
+            if (aboutText) aboutText.innerText = groupData.about || "";
+
+            // Show Group Creator Details
+            const creatorName = groupData.createdBy || 'Unknown';
+            const creatorEmail = groupData.createdByEmail || '';
+            if (creatorEl) {
+                creatorEl.innerText = creatorEmail ? `Created by: ${creatorName} (${creatorEmail})` : `Created by: ${creatorName}`;
+            }
+            updateLocalUserGroupCreator(CURRENT_GROUP, creatorEmail, creatorName);
+
+            const limit = groupData.memberLimit || 0;
+            if (limitInput) limitInput.value = limit > 0 ? limit : '';
+            if (limitValue) limitValue.innerText = limit > 0 ? limit : 'Unlimited';
+
+            if (isLeader) {
+                if (limitDiv) limitDiv.classList.remove('hidden');
+                if (limitDisplayDiv) limitDisplayDiv.classList.add('hidden');
+            } else {
+                if (limitDiv) limitDiv.classList.add('hidden');
+                if (limitDisplayDiv) limitDisplayDiv.classList.remove('green-600');
+            }
         } else {
             if (avatarImg) avatarImg.src = defaultAvatar;
         }
@@ -3385,33 +5107,38 @@ function openGroupAvatarInput() {
 }
 
 function uploadGroupAvatar(event) {
-    const file = event.target.files[0];
-    if (!file || !CURRENT_GROUP) return;
+    const rawFile = event.target.files[0];
+    if (!rawFile || !CURRENT_GROUP) return;
 
-    const reader = new FileReader();
-    reader.onload = function (e) {
-        const base64 = e.target.result;
-        const avatarImg = document.getElementById('groups-avatar-img');
-        if (avatarImg) avatarImg.src = base64;
+    processHEIC(rawFile).then(file => {
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            openCropper(e.target.result, function (croppedBase64) {
+                compressBase64Image(croppedBase64).then(compressed => {
+                    const avatarImg = document.getElementById('groups-avatar-img');
+                    if (avatarImg) avatarImg.src = compressed;
 
-        if (usingFirebase) {
-            db.collection("groups").doc(CURRENT_GROUP).update({
-                avatar: base64
-            }).then(() => {
-                alert("Group photo updated!");
-            }).catch(err => {
-                alert("Failed to update group photo: " + err.message);
+                    if (usingFirebase) {
+                        db.collection("groups").doc(CURRENT_GROUP).update({
+                            avatar: compressed
+                        }).then(() => {
+                            alert("Group photo updated!");
+                        }).catch(err => {
+                            alert("Failed to update group photo: " + err.message);
+                        });
+                    } else {
+                        const dbObj = getLocalDB();
+                        if (dbObj.groups[CURRENT_GROUP]) {
+                            dbObj.groups[CURRENT_GROUP].avatar = compressed;
+                            saveLocalDB(dbObj);
+                            alert("Group photo updated!");
+                        }
+                    }
+                });
             });
-        } else {
-            const dbObj = getLocalDB();
-            if (dbObj.groups[CURRENT_GROUP]) {
-                dbObj.groups[CURRENT_GROUP].avatar = base64;
-                saveLocalDB(dbObj);
-                alert("Group photo updated!");
-            }
-        }
-    };
-    reader.readAsDataURL(file);
+        };
+        reader.readAsDataURL(file);
+    });
 }
 
 function toggleEditGroupAbout() {
@@ -3453,6 +5180,1014 @@ function saveGroupAbout() {
             saveLocalDB(dbObj);
             document.getElementById('groups-about-text').innerText = aboutVal;
             toggleEditGroupAbout();
+        }
+    }
+}
+
+// Manual data sync/reload helper to avoid full browser refreshes
+function handleReload(event) {
+    if (event && event.currentTarget) {
+        const btn = event.currentTarget;
+        const icon = btn.querySelector('i');
+        if (icon) {
+            icon.classList.add('animate-spin');
+            setTimeout(() => {
+                icon.classList.remove('animate-spin');
+            }, 1000);
+        }
+    }
+
+    if (usingFirebase) {
+        discoverUserGroupsFirebase();
+        initApp();
+    } else {
+        syncLocalGroupData();
+        initApp();
+    }
+}
+
+function saveGroupLimit() {
+    const limitInput = document.getElementById('groups-limit-input');
+    if (!limitInput || !CURRENT_GROUP) return;
+    const limitVal = parseInt(limitInput.value) || 0;
+
+    if (usingFirebase) {
+        db.collection("groups").doc(CURRENT_GROUP).update({
+            memberLimit: limitVal
+        }).then(() => {
+            alert("Member limit updated successfully!");
+            initApp();
+        }).catch(err => alert("Failed to update member limit: " + err.message));
+    } else {
+        const dbObj = getLocalDB();
+        if (dbObj.groups[CURRENT_GROUP]) {
+            dbObj.groups[CURRENT_GROUP].memberLimit = limitVal;
+            saveLocalDB(dbObj);
+            alert("Member limit updated successfully!");
+            initApp();
+        }
+    }
+}
+
+function toggleGroupSpecificQR(checked) {
+    localStorage.setItem('gaytm_group_specific_qr', checked ? 'true' : 'false');
+    // Force refresh the active QR view
+    const modal = document.getElementById('profile-qr-modal');
+    if (modal && !modal.classList.contains('hidden')) {
+        openProfileQRModal();
+    }
+}
+
+// Swipe Down to Dismiss/Minimize Modals
+function makeModalSwipable(modalId, contentId) {
+    const modal = document.getElementById(modalId);
+    const content = document.getElementById(contentId);
+    if (!modal || !content) return;
+
+    let touchStart = 0;
+    let currentY = 0;
+    let isDragging = false;
+
+    // Check if touch target is scrolled down (so we don't interfere with inner scrolling)
+    function isAtScrollTop(e) {
+        const scrollable = e.target.closest('.overflow-y-auto, .overflow-y-scroll, [class*="overflow-y"]');
+        if (scrollable) {
+            return scrollable.scrollTop <= 0;
+        }
+        return content.scrollTop <= 0;
+    }
+
+    // Touch Events
+    content.addEventListener('touchstart', e => {
+        if (isAtScrollTop(e)) {
+            touchStart = e.touches[0].clientY;
+            content.style.transition = 'none';
+        } else {
+            touchStart = 0;
+        }
+    }, { passive: true });
+
+    content.addEventListener('touchmove', e => {
+        if (touchStart === 0) return;
+        currentY = e.touches[0].clientY;
+        const diff = currentY - touchStart;
+        if (diff > 0) {
+            content.style.transform = `translateY(${diff}px)`;
+        }
+    }, { passive: true });
+
+    content.addEventListener('touchend', e => {
+        if (touchStart === 0) return;
+        const diff = currentY - touchStart;
+        content.style.transition = 'transform 0.3s ease-out';
+        if (diff > 120) {
+            closeModal(modalId);
+        } else {
+            content.style.transform = 'translateY(0)';
+        }
+        touchStart = 0;
+        currentY = 0;
+    });
+
+    // Mouse drag events for webapp
+    content.addEventListener('mousedown', e => {
+        if (isAtScrollTop(e)) {
+            isDragging = true;
+            touchStart = e.clientY;
+            content.style.transition = 'none';
+            content.style.userSelect = 'none';
+        }
+    });
+
+    window.addEventListener('mousemove', e => {
+        if (!isDragging) return;
+        currentY = e.clientY;
+        const diff = currentY - touchStart;
+        if (diff > 0) {
+            content.style.transform = `translateY(${diff}px)`;
+        }
+    });
+
+    window.addEventListener('mouseup', e => {
+        if (!isDragging) return;
+        isDragging = false;
+        const diff = currentY - touchStart;
+        content.style.transition = 'transform 0.3s ease-out';
+        content.style.userSelect = '';
+        if (diff > 120) {
+            closeModal(modalId);
+        } else {
+            content.style.transform = 'translateY(0)';
+        }
+        touchStart = 0;
+        currentY = 0;
+    });
+}
+
+// Enable Modal Swiping on Load
+setTimeout(() => {
+    makeModalSwipable('expense-modal', 'expense-modal-content');
+    makeModalSwipable('moment-modal', 'moment-modal-content');
+    makeModalSwipable('chat-msg-options-modal', 'chat-msg-options-modal-content');
+    makeModalSwipable('profile-qr-modal', 'profile-qr-modal-content');
+    makeModalSwipable('groups-modal', 'groups-modal-content');
+    makeModalSwipable('profile-edit-modal', 'profile-edit-modal-content');
+    makeModalSwipable('chatbox-modal', 'chatbox-modal-content');
+}, 1000);
+
+// --- MOBILE PULL TO REFRESH TOUCH GESTURES ---
+let ptrTouchStart = 0;
+let ptrPullOffset = 0;
+const ptrThreshold = 100;
+
+document.addEventListener('touchstart', e => {
+    const isModal = e.target.closest('#expense-modal') ||
+        e.target.closest('#groups-modal') ||
+        e.target.closest('#profile-drawer') ||
+        e.target.closest('#moment-modal') ||
+        e.target.closest('#qr-modal') ||
+        e.target.closest('#firebase-modal') ||
+        e.target.closest('#otp-modal') ||
+        e.target.closest('#profile-qr-modal') ||
+        e.target.closest('#edit-split-modal') ||
+        e.target.closest('#profile-edit-modal') ||
+        e.target.closest('#reset-password-modal') ||
+        e.target.closest('#crop-modal') ||
+        e.target.closest('#chatbox-modal');
+
+    const mainArea = document.querySelector('main');
+    if (!isModal && mainArea && mainArea.scrollTop === 0) {
+        ptrTouchStart = e.touches[0].clientY;
+    } else {
+        ptrTouchStart = 0;
+    }
+}, { passive: true });
+
+document.addEventListener('touchmove', e => {
+    if (ptrTouchStart === 0) return;
+    const currentY = e.touches[0].clientY;
+    ptrPullOffset = currentY - ptrTouchStart;
+
+    if (ptrPullOffset > 0) {
+        const indicator = document.getElementById('pull-refresh-indicator');
+        const arrow = document.getElementById('pull-refresh-arrow');
+        if (indicator) {
+            const translateY = Math.min(ptrPullOffset * 0.4 - 50, 20); // max 20px down
+            indicator.style.transform = `translateY(${translateY}px)`;
+
+            if (arrow) {
+                const rotation = Math.min(ptrPullOffset * 2, 180);
+                arrow.style.transform = `rotate(${rotation}deg)`;
+            }
+        }
+    }
+}, { passive: true });
+
+document.addEventListener('touchend', () => {
+    if (ptrTouchStart === 0) return;
+
+    const indicator = document.getElementById('pull-refresh-indicator');
+    const arrow = document.getElementById('pull-refresh-arrow');
+    const spinner = document.getElementById('pull-refresh-spinner');
+
+    if (ptrPullOffset >= ptrThreshold) {
+        if (arrow) arrow.classList.add('hidden');
+        if (spinner) spinner.classList.remove('hidden');
+
+        if (indicator) {
+            indicator.style.transform = `translateY(20px)`;
+        }
+
+        // Actually refresh the mobile browser window!
+        setTimeout(() => {
+            window.location.reload();
+        }, 300);
+    } else {
+        if (indicator) indicator.style.transform = `translateY(-100%)`;
+        setTimeout(() => {
+            if (arrow) arrow.style.transform = `rotate(0deg)`;
+        }, 250);
+    }
+
+    ptrTouchStart = 0;
+    ptrPullOffset = 0;
+});
+
+function toggleAdvancedSettingsDropdown() {
+    const content = document.getElementById('advanced-settings-dropdown-content');
+    const chevron = document.getElementById('advanced-settings-chevron');
+    if (content.classList.contains('hidden')) {
+        content.classList.remove('hidden');
+        if (chevron) chevron.classList.add('rotate-180');
+    } else {
+        content.classList.add('hidden');
+        if (chevron) chevron.classList.remove('rotate-180');
+    }
+}
+
+function copyCreateGroupCode() {
+    const code = document.getElementById('create-group-code').value.trim();
+    if (!code) {
+        alert("Please enter or generate a code first!");
+        return;
+    }
+    navigator.clipboard.writeText(code.toUpperCase()).then(() => {
+        alert("Group code copied: " + code.toUpperCase());
+    }).catch(() => {
+        alert("Failed to copy automatically. Code is: " + code.toUpperCase());
+    });
+}
+
+function generateUniqueGroupCode() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const generateRandomCode = () => {
+        let result = '';
+        for (let i = 0; i < 6; i++) {
+            result += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return result;
+    };
+
+    const attemptGenerate = (attempts = 0) => {
+        if (attempts > 10) {
+            alert("Could not generate a unique code. Please try entering one manually.");
+            return;
+        }
+        const candidate = generateRandomCode();
+        if (usingFirebase && db) {
+            db.collection("groups").doc(candidate).get().then((doc) => {
+                if (doc.exists) {
+                    attemptGenerate(attempts + 1);
+                } else {
+                    document.getElementById('create-group-code').value = candidate;
+                }
+            }).catch(() => {
+                document.getElementById('create-group-code').value = candidate;
+            });
+        } else {
+            const dbObj = getLocalDB();
+            if (dbObj.groups[candidate]) {
+                attemptGenerate(attempts + 1);
+            } else {
+                document.getElementById('create-group-code').value = candidate;
+            }
+        }
+    };
+
+    attemptGenerate();
+}
+
+function forgotPassword() {
+    const email = document.getElementById('login-email').value.trim();
+    if (!email) {
+        alert("Please enter your email address in the Email field first.");
+        return;
+    }
+
+    if (usingFirebase) {
+        const loader = document.getElementById('loader-view');
+        loader.classList.remove('hidden');
+        loader.classList.remove('opacity-0');
+        firebase.auth().sendPasswordResetEmail(email)
+            .then(() => {
+                loader.classList.add('hidden');
+                alert("Password reset email sent! Check your inbox to change your password.");
+            })
+            .catch((error) => {
+                loader.classList.add('hidden');
+                alert("Error sending password reset email: " + error.message);
+            });
+    } else {
+        const localUsers = JSON.parse(localStorage.getItem('gaytm_local_users') || '{}');
+        const user = localUsers[email.toLowerCase()];
+        if (!user) {
+            alert("No registered account found with this email.");
+            return;
+        }
+
+        sendEmailOTP(user.name, email, 'reset_password', { name: user.name, email });
+    }
+}
+
+function submitNewPassword() {
+    const newPassword = document.getElementById('reset-new-password').value.trim();
+    if (newPassword.length < 6) {
+        alert("Password must be at least 6 characters.");
+        return;
+    }
+
+    const { email } = pendingAuthData;
+    const localUsers = JSON.parse(localStorage.getItem('gaytm_local_users') || '{}');
+    if (localUsers[email.toLowerCase()]) {
+        localUsers[email.toLowerCase()].password = newPassword;
+        localStorage.setItem('gaytm_local_users', JSON.stringify(localUsers));
+        closeModal('reset-password-modal');
+        alert("Password updated successfully! You can now log in.");
+        document.getElementById('login-password').value = newPassword;
+        document.getElementById('reset-new-password').value = '';
+    }
+}
+
+let cropCallback = null;
+let cropImageElement = null;
+let cropBoxElement = null;
+let cropContainerElement = null;
+
+let imgZoom = 1.0;
+let imgLeft = 0;
+let imgTop = 0;
+let imgWidth = 0;
+let imgHeight = 0;
+let initWidth = 0;
+let initHeight = 0;
+let isDraggingImg = false;
+let dragStartX = 0;
+let dragStartY = 0;
+let imgStartLeft = 0;
+let imgStartTop = 0;
+
+let isDraggingHandle = false;
+let activeHandle = null;
+let handleDragStartX = 0;
+let handleDragStartY = 0;
+let initBoxLeft = 0;
+let initBoxTop = 0;
+let initBoxWidth = 0;
+let initBoxHeight = 0;
+
+function openCropper(base64Source, callback) {
+    const img = document.getElementById('crop-image');
+    cropCallback = callback;
+
+    // Zoom fixed at 1 (zoom feature removed)
+    imgZoom = 1.0;
+
+    img.onload = function () {
+        cropContainerElement = document.getElementById('crop-container');
+        cropBoxElement = document.getElementById('crop-box');
+        cropImageElement = img;
+
+        const containerWidth = cropContainerElement.clientWidth || 300;
+        const containerHeight = cropContainerElement.clientHeight || 300;
+
+        const natW = img.naturalWidth || 300;
+        const natH = img.naturalHeight || 300;
+
+        // Size to fit container initially
+        const r = Math.min(containerWidth / natW, containerHeight / natH);
+        initWidth = natW * r;
+        initHeight = natH * r;
+        imgWidth = initWidth;
+        imgHeight = initHeight;
+
+        imgLeft = (containerWidth - imgWidth) / 2;
+        imgTop = (containerHeight - imgHeight) / 2;
+
+        img.style.position = 'absolute';
+        img.style.width = imgWidth + 'px';
+        img.style.height = imgHeight + 'px';
+        img.style.left = imgLeft + 'px';
+        img.style.top = imgTop + 'px';
+
+        // Crop box — dynamic size: 85% of the container, centered
+        const boxSize = Math.min(containerWidth, containerHeight) * 0.85;
+        const boxWidth = boxSize;
+        const boxHeight = boxSize;
+        cropBoxElement.style.width = boxWidth + 'px';
+        cropBoxElement.style.height = boxHeight + 'px';
+        cropBoxElement.style.left = ((containerWidth - boxWidth) / 2) + 'px';
+        cropBoxElement.style.top = ((containerHeight - boxHeight) / 2) + 'px';
+
+        setupCropperEvents();
+    };
+
+    img.src = base64Source;
+    openModal('crop-modal');
+
+    // Fallback in case onload was already fired or cached
+    if (img.complete && img.naturalWidth) {
+        img.onload();
+    }
+}
+
+function setupCropperEvents() {
+    cropContainerElement.onmousedown = startImgDrag;
+    cropContainerElement.ontouchstart = startImgDrag;
+
+    const handles = cropBoxElement.querySelectorAll('.crop-handle');
+    handles.forEach(handle => {
+        let direction = 'br';
+        if (handle.classList.contains('crop-handle-tl')) direction = 'tl';
+        if (handle.classList.contains('crop-handle-tr')) direction = 'tr';
+        if (handle.classList.contains('crop-handle-bl')) direction = 'bl';
+        if (handle.classList.contains('crop-handle-br')) direction = 'br';
+
+        handle.onmousedown = (e) => startHandleDrag(e, direction);
+        handle.ontouchstart = (e) => startHandleDrag(e, direction);
+    });
+
+    function startImgDrag(e) {
+        if (e.target.classList.contains('crop-handle')) return;
+        e.preventDefault();
+        isDraggingImg = true;
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        dragStartX = clientX;
+        dragStartY = clientY;
+        imgStartLeft = imgLeft;
+        imgStartTop = imgTop;
+
+        document.onmousemove = doImgDrag;
+        document.ontouchmove = doImgDrag;
+        document.onmouseup = stopImgDrag;
+        document.ontouchend = stopImgDrag;
+    }
+
+    function doImgDrag(e) {
+        if (!isDraggingImg) return;
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const dx = clientX - dragStartX;
+        const dy = clientY - dragStartY;
+
+        imgLeft = imgStartLeft + dx;
+        imgTop = imgStartTop + dy;
+
+        cropImageElement.style.left = imgLeft + 'px';
+        cropImageElement.style.top = imgTop + 'px';
+    }
+
+    function stopImgDrag() {
+        isDraggingImg = false;
+        document.onmousemove = null;
+        document.ontouchmove = null;
+        document.onmouseup = null;
+        document.ontouchend = null;
+    }
+
+    function startHandleDrag(e, direction) {
+        e.preventDefault();
+        e.stopPropagation();
+        isDraggingHandle = true;
+        activeHandle = direction;
+
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        handleDragStartX = clientX;
+        handleDragStartY = clientY;
+
+        initBoxLeft = cropBoxElement.offsetLeft;
+        initBoxTop = cropBoxElement.offsetTop;
+        initBoxWidth = cropBoxElement.offsetWidth;
+        initBoxHeight = cropBoxElement.offsetHeight;
+
+        document.onmousemove = doHandleDrag;
+        document.ontouchmove = doHandleDrag;
+        document.onmouseup = stopHandleDrag;
+        document.ontouchend = stopHandleDrag;
+    }
+
+    function doHandleDrag(e) {
+        if (!isDraggingHandle) return;
+        e.preventDefault();
+
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const dx = clientX - handleDragStartX;
+        const dy = clientY - handleDragStartY;
+
+        const containerWidth = cropContainerElement.clientWidth || 300;
+        const containerHeight = cropContainerElement.clientHeight || 300;
+
+        let newSize = initBoxWidth;
+        let newLeft = initBoxLeft;
+        let newTop = initBoxTop;
+
+        if (activeHandle === 'br') {
+            newSize = initBoxWidth + dx;
+            newSize = Math.max(50, Math.min(newSize, containerWidth - initBoxLeft, containerHeight - initBoxTop));
+        } else if (activeHandle === 'bl') {
+            newSize = initBoxWidth - dx;
+            const maxSize = Math.min(initBoxLeft + initBoxWidth, containerHeight - initBoxTop);
+            newSize = Math.max(50, Math.min(newSize, maxSize));
+            newLeft = initBoxLeft + initBoxWidth - newSize;
+        } else if (activeHandle === 'tr') {
+            newSize = initBoxWidth + dx;
+            const maxSize = Math.min(initBoxTop + initBoxHeight, containerWidth - initBoxLeft);
+            newSize = Math.max(50, Math.min(newSize, maxSize));
+            newTop = initBoxTop + initBoxHeight - newSize;
+        } else if (activeHandle === 'tl') {
+            newSize = initBoxWidth - dx;
+            const maxSize = Math.min(initBoxLeft + initBoxWidth, initBoxTop + initBoxHeight);
+            newSize = Math.max(50, Math.min(newSize, maxSize));
+            newLeft = initBoxLeft + initBoxWidth - newSize;
+            newTop = initBoxTop + initBoxHeight - newSize;
+        }
+
+        cropBoxElement.style.width = newSize + 'px';
+        cropBoxElement.style.height = newSize + 'px';
+        cropBoxElement.style.left = newLeft + 'px';
+        cropBoxElement.style.top = newTop + 'px';
+    }
+
+    function stopHandleDrag() {
+        isDraggingHandle = false;
+        document.onmousemove = null;
+        document.ontouchmove = null;
+        document.onmouseup = null;
+        document.ontouchend = null;
+    }
+}
+
+// Zoom feature removed — stub kept to avoid errors if called
+function updateCropImageZoom() {}
+
+function performCrop() {
+    const img = cropImageElement;
+    const box = cropBoxElement;
+    const container = cropContainerElement;
+
+    if (!img || !box || !container) return;
+
+    const natWidth = img.naturalWidth;
+    const natHeight = img.naturalHeight;
+
+    // Crop box position relative to the panned/zoomed image
+    let boxLeft = box.offsetLeft - imgLeft;
+    let boxTop = box.offsetTop - imgTop;
+    let boxWidth = box.offsetWidth;
+    let boxHeight = box.offsetHeight;
+
+    // Convert coordinates to natural image scale
+    const scaleX = natWidth / imgWidth;
+    const scaleY = natHeight / imgHeight;
+
+    const cropX = boxLeft * scaleX;
+    const cropY = boxTop * scaleY;
+    const cropW = boxWidth * scaleX;
+    const cropH = boxHeight * scaleY;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = cropW;
+    canvas.height = cropH;
+    const ctx = canvas.getContext('2d');
+
+    const tempImg = new Image();
+    tempImg.onload = function () {
+        ctx.drawImage(tempImg, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+        const croppedBase64 = canvas.toDataURL('image/jpeg', 0.9);
+        closeModal('crop-modal');
+        if (cropCallback) {
+            cropCallback(croppedBase64);
+        }
+    };
+    tempImg.src = img.src;
+}
+
+function compressBase64Image(base64Str, maxSizeKB = 800, initialQuality = 0.85) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = function () {
+            const canvas = document.createElement('canvas');
+            let { width, height } = img;
+            const MAX_DIM = 1200;
+            if (width > MAX_DIM || height > MAX_DIM) {
+                if (width > height) {
+                    height = Math.round(height * MAX_DIM / width);
+                    width = MAX_DIM;
+                } else {
+                    width = Math.round(width * MAX_DIM / height);
+                    height = MAX_DIM;
+                }
+            }
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+
+            let quality = initialQuality;
+            let result = canvas.toDataURL('image/jpeg', quality);
+            while (result.length * 0.75 > maxSizeKB * 1024 && quality > 0.2) {
+                quality -= 0.08;
+                result = canvas.toDataURL('image/jpeg', quality);
+            }
+            resolve(result);
+        };
+        img.onerror = () => resolve(base64Str);
+        img.src = base64Str;
+    });
+}
+
+// --- CHATBOX & FEED NOTIFICATION LOGIC ---
+
+function getDebtStatusText(name) {
+    if (typeof calculateNetDebts !== 'function') return 'All settled up';
+    const netDebts = calculateNetDebts();
+    const debtToFriend = netDebts.find(d =>
+        d.from.toLowerCase() === CURRENT_USER.toLowerCase() &&
+        d.to.toLowerCase() === name.toLowerCase());
+    const debtFromFriend = netDebts.find(d =>
+        d.from.toLowerCase() === name.toLowerCase() &&
+        d.to.toLowerCase() === CURRENT_USER.toLowerCase());
+
+    if (debtToFriend) {
+        return `You owe: ₹${debtToFriend.amount.toFixed(2)}`;
+    } else if (debtFromFriend) {
+        return `Owes you: ₹${debtFromFriend.amount.toFixed(2)}`;
+    } else {
+        return `All settled up`;
+    }
+}
+
+function openChatbox(name, uid) {
+    activeChatUser = name;
+    activeChatUid = uid;
+    isChatboxOpen = true;
+
+    // Set user name
+    const nameEl = document.getElementById('chatbox-user-name');
+    if (nameEl) nameEl.innerText = name;
+
+    // Set avatar
+    const avatarEl = document.getElementById('chatbox-user-avatar');
+    if (avatarEl) {
+        const member = users.find(u => u.name === name);
+        avatarEl.src = member ? member.avatar : 'https://api.dicebear.com/7.x/adventurer/svg?seed=placeholder';
+    }
+
+    // Set debt status
+    const statusEl = document.getElementById('chatbox-user-status');
+    if (statusEl) {
+        statusEl.innerText = getDebtStatusText(name);
+    }
+
+    // Creator "Kick Out" button visibility
+    const kickBtn = document.getElementById('chatbox-kick-btn');
+    if (kickBtn) {
+        const admin = getGroupAdmin();
+        const isCreator = (admin && admin.toLowerCase() === CURRENT_USER.toLowerCase());
+        const isMe = name.toLowerCase() === CURRENT_USER.toLowerCase();
+
+        if (isCreator && !isMe) {
+            kickBtn.classList.remove('hidden');
+            kickBtn.onclick = () => {
+                closeModal('chatbox-modal');
+                removeMember(name, uid);
+            };
+        } else {
+            kickBtn.classList.add('hidden');
+        }
+    }
+
+    // Input reset
+    const input = document.getElementById('chatbox-input');
+    if (input) input.value = '';
+
+    openModal('chatbox-modal');
+    renderChatMessages();
+
+    // Auto-focus the input so keyboard opens on mobile and laptop is ready to type
+    setTimeout(() => {
+        const chatInput = document.getElementById('chatbox-input');
+        if (chatInput && document.activeElement !== chatInput) {
+            chatInput.focus();
+        }
+    }, 350); // slight delay to let the modal slide-in animation finish
+}
+
+function sendChatMessage() {
+    // Guard: kicked/removed user cannot send messages
+    if (!CURRENT_GROUP || !CURRENT_USER) {
+        alert('You are not in an active group. You cannot send messages.');
+        closeModal('chatbox-modal');
+        return;
+    }
+    // In fallback mode with empty users array, skip membership check
+    // (we can't verify without Firestore data, but the user was a member before)
+    if (users.length > 0) {
+        let isMember = false;
+        if (usingFirebase && firebase.auth().currentUser) {
+            const currentUid = firebase.auth().currentUser.uid;
+            isMember = users.some(u => u.uid === currentUid);
+        }
+        if (!isMember) {
+            isMember = users.some(u => u.name.trim().toLowerCase() === CURRENT_USER.trim().toLowerCase());
+        }
+        if (!isMember) {
+            alert('You are no longer a member of this group and cannot send messages.');
+            closeModal('chatbox-modal');
+            return;
+        }
+    }
+
+    const input = document.getElementById('chatbox-input');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+
+    const newMsg = {
+        id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        from: CURRENT_USER,
+        to: activeChatUser,
+        text: text,
+        timestamp: Date.now()
+    };
+
+    if (usingFirebase) {
+        db.collection("groups").doc(CURRENT_GROUP).collection("chats").add({
+            from: CURRENT_USER,
+            to: activeChatUser,
+            text: text,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        }).then(() => {
+            input.value = '';
+            if (document.activeElement !== input) {
+                input.focus(); // keep keyboard open after sending
+            }
+        }).catch(err => {
+            console.error("Error sending message to Firebase: ", err);
+        });
+    } else {
+        const dbObj = getLocalDB();
+        const groupData = dbObj.groups[CURRENT_GROUP];
+        if (groupData) {
+            if (!groupData.chats) groupData.chats = [];
+            groupData.chats.push(newMsg);
+            saveLocalDB(dbObj);
+            groupChats = groupData.chats;
+            input.value = '';
+            if (document.activeElement !== input) {
+                input.focus(); // keep keyboard open after sending
+            }
+            renderChatMessages();
+        }
+    }
+}
+
+// Long-press detection helpers
+function startChatLongPress(msgId, text, event) {
+    clearTimeout(chatLongPressTimer);
+    chatLongPressTimer = setTimeout(() => {
+        openChatMsgOptions(msgId, text);
+        // vibrate on devices that support it to indicate long press
+        if (navigator.vibrate) navigator.vibrate(50);
+    }, 600);
+}
+
+function cancelChatLongPress() {
+    clearTimeout(chatLongPressTimer);
+}
+
+function openChatMsgOptions(msgId, text) {
+    activeOptionsMsgId = msgId;
+    activeOptionsMsgText = text;
+    openModal('chat-msg-options-modal');
+}
+
+function editChatMessage() {
+    if (!activeOptionsMsgId) return;
+
+    // Quick prompt for editing
+    const newText = prompt("Edit message:", activeOptionsMsgText);
+    if (newText === null || newText.trim() === "" || newText.trim() === activeOptionsMsgText) {
+        closeModal('chat-msg-options-modal');
+        return;
+    }
+
+    if (usingFirebase) {
+        db.collection("groups").doc(CURRENT_GROUP).collection("chats").doc(activeOptionsMsgId).update({
+            text: newText.trim()
+        }).then(() => {
+            closeModal('chat-msg-options-modal');
+        }).catch(err => alert("Failed to edit: " + err.message));
+    } else {
+        const dbObj = getLocalDB();
+        const groupData = dbObj.groups[CURRENT_GROUP];
+        if (groupData && groupData.chats) {
+            const idx = groupData.chats.findIndex(m => m.id === activeOptionsMsgId);
+            if (idx !== -1) {
+                groupData.chats[idx].text = newText.trim();
+                saveLocalDB(dbObj);
+                groupChats = groupData.chats;
+                renderChatMessages();
+            }
+        }
+        closeModal('chat-msg-options-modal');
+    }
+}
+
+function unsendChatMessage() {
+    if (!activeOptionsMsgId) return;
+
+    if (!confirm("Are you sure you want to unsend this message?")) {
+        return;
+    }
+
+    if (usingFirebase) {
+        db.collection("groups").doc(CURRENT_GROUP).collection("chats").doc(activeOptionsMsgId).delete()
+            .then(() => {
+                closeModal('chat-msg-options-modal');
+            }).catch(err => alert("Failed to unsend: " + err.message));
+    } else {
+        const dbObj = getLocalDB();
+        const groupData = dbObj.groups[CURRENT_GROUP];
+        if (groupData && groupData.chats) {
+            groupData.chats = groupData.chats.filter(m => m.id !== activeOptionsMsgId);
+            saveLocalDB(dbObj);
+            groupChats = groupData.chats;
+            renderChatMessages();
+        }
+        closeModal('chat-msg-options-modal');
+    }
+}
+
+function wipeLocalChat() {
+    if (!CURRENT_GROUP || !CURRENT_USER || !activeChatUser) return;
+    if (confirm(`Are you sure you want to wipe this chat? It will only clear for you and remain visible to others.`)) {
+        localStorage.setItem(`gaytm_chat_wiped_timestamp_${CURRENT_GROUP}_${CURRENT_USER}_${activeChatUser}`, Date.now().toString());
+        renderChatMessages();
+    }
+}
+
+function renderChatMessages() {
+    const container = document.getElementById('chatbox-messages');
+    if (!container) return;
+    container.innerHTML = '';
+
+    // Mark as read ONLY if the chatbox is actually visible on screen.
+    // If it's hidden/minimized, new messages should still trigger the red dot.
+    const chatboxModalEl = document.getElementById('chatbox-modal');
+    const isChatboxVisible = chatboxModalEl && !chatboxModalEl.classList.contains('hidden');
+    if (activeChatUser && isChatboxVisible) {
+        updateChatLastSeen(activeChatUser);
+    }
+    renderGroupMembers();
+    updateHomeNotificationDot();
+
+    const wipedTimestamp = parseInt(localStorage.getItem(`gaytm_chat_wiped_timestamp_${CURRENT_GROUP}_${CURRENT_USER}_${activeChatUser}`)) || 0;
+    const filteredChats = groupChats.filter(msg => {
+        const fromVal = msg.from || '';
+        const toVal = msg.to || '';
+        const isMatch = (fromVal.toLowerCase() === CURRENT_USER.toLowerCase() && toVal.toLowerCase() === activeChatUser.toLowerCase()) ||
+            (fromVal.toLowerCase() === activeChatUser.toLowerCase() && toVal.toLowerCase() === CURRENT_USER.toLowerCase());
+        return isMatch && (msg.timestamp > wipedTimestamp);
+    });
+
+    container.className = `flex-1 overflow-y-auto p-4 custom-scrollbar bg-zinc-50 dark:bg-black/20 pb-20 pt-6 space-y-3 relative theme-${CURRENT_CHAT_THEME}`;
+
+    if (filteredChats.length === 0) {
+        container.innerHTML = `
+            <div class="h-full flex flex-col items-center justify-center text-zinc-400 p-4 text-center">
+                <i data-lucide="message-square" class="w-8 h-8 opacity-45 mb-2"></i>
+                <p class="text-xs">No messages yet. Say hello!</p>
+            </div>
+        `;
+        if (typeof lucide !== 'undefined') { lucide.createIcons(); }
+        return;
+    }
+
+    filteredChats.forEach(msg => {
+        const isMe = msg.from.toLowerCase() === CURRENT_USER.toLowerCase();
+
+        let msgTime = '';
+        if (msg.timestamp) {
+            const dateVal = new Date(msg.timestamp);
+            msgTime = dateVal.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        const bubbleClass = isMe
+            ? 'chat-bubble-me bg-indigo-600 text-white rounded-2xl rounded-tr-none shadow-sm cursor-pointer select-none'
+            : 'chat-bubble-other bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-2xl rounded-tl-none shadow-sm cursor-pointer select-none';
+
+        const safeText = msg.text.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+        const longPressHandlers = isMe && msg.id
+            ? `onmousedown="startChatLongPress('${msg.id}', '${safeText}', event)" onmouseup="cancelChatLongPress()" onmouseleave="cancelChatLongPress()" ontouchstart="startChatLongPress('${msg.id}', '${safeText}', event)" ontouchend="cancelChatLongPress()" ontouchmove="cancelChatLongPress()"`
+            : '';
+
+        // --- Double tick (seen receipt) for MY messages ---
+        let tickSvg = '';
+        if (isMe) {
+            let isSeen = false;
+            if (usingFirebase) {
+                // chatLastRead is synced to Firestore member doc by updateChatLastSeen
+                const recipientMember = users.find(u =>
+                    activeChatUid ? u.uid === activeChatUid : (u.name || '').toLowerCase() === activeChatUser.toLowerCase()
+                );
+                const theirLastRead = ((recipientMember || {}).chatLastRead || {})[CURRENT_USER] || 0;
+                isSeen = msg.timestamp && theirLastRead >= msg.timestamp;
+            } else {
+                // Local mode: read the other user's localStorage entry directly
+                try {
+                    const theirKey = `gaytm_chat_last_seen_${CURRENT_GROUP}_${activeChatUser}`;
+                    const theirLastSeen = JSON.parse(localStorage.getItem(theirKey)) || {};
+                    isSeen = msg.timestamp && (theirLastSeen[CURRENT_USER] || 0) >= msg.timestamp;
+                } catch (e) {}
+            }
+            if (isSeen) {
+                // Double tick (seen)
+                tickSvg = `<svg viewBox="0 0 16 11" width="14" height="10" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;margin-bottom:1px" title="Seen">
+                    <path d="M1 5.5L4.5 9L10 1" fill="none" stroke="#0284c7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M5 5.5L8.5 9L14 1" fill="none" stroke="#0284c7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>`;
+            } else {
+                // Single tick (sent)
+                tickSvg = `<svg viewBox="0 0 16 11" width="14" height="10" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;margin-bottom:1px" title="Sent">
+                    <path d="M1 5.5L4.5 9L10 1" fill="none" stroke="#64748b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>`;
+            }
+        }
+
+        container.innerHTML += `
+            <div class="flex flex-col w-full mb-3">
+                <div class="flex flex-col max-w-[75%] ${isMe ? 'ml-auto items-end' : 'mr-auto items-start'}">
+                    <div class="p-3 text-sm font-medium ${bubbleClass} break-words transition-opacity active:opacity-75" ${longPressHandlers}>
+                        ${msg.text}
+                    </div>
+                    <div class="flex items-center gap-1 mt-1 px-1">
+                        <span class="text-[9px] text-zinc-500 dark:text-zinc-400">${msgTime}</span>
+                        ${tickSvg}
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+
+    container.scrollTop = container.scrollHeight;
+}
+
+function checkFeedNotificationDot() {
+    if (!CURRENT_GROUP || !CURRENT_USER) return;
+
+    // If we are actively looking at the moments tab, update last viewed timestamp and hide dot.
+    const momentsTab = document.querySelector('[data-tab="moments"]');
+    const isMomentsTabActive = momentsTab && momentsTab.classList.contains('text-indigo-600');
+    if (isMomentsTabActive) {
+        localStorage.setItem('gaytm_last_feed_viewed_' + CURRENT_GROUP, Date.now().toString());
+        const dot = document.getElementById('feed-notification-dot');
+        if (dot) dot.classList.add('hidden');
+        return;
+    }
+
+    const lastViewed = parseInt(localStorage.getItem('gaytm_last_feed_viewed_' + CURRENT_GROUP)) || 0;
+
+    const hasNewMoments = moments.some(m => {
+        if (m.user === CURRENT_USER) return false;
+
+        let mTime = 0;
+        if (m.timestamp) {
+            mTime = m.timestamp;
+        } else if (m.id && m.id.startsWith('moment_')) {
+            mTime = parseInt(m.id.split('_')[1]) || 0;
+        }
+        return mTime > lastViewed;
+    });
+
+    const dot = document.getElementById('feed-notification-dot');
+    if (dot) {
+        if (hasNewMoments) {
+            dot.classList.remove('hidden');
+        } else {
+            dot.classList.add('hidden');
         }
     }
 }
